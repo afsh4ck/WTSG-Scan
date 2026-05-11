@@ -32,7 +32,6 @@ def run_nuclei_scan(target):
     findings = []
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp_json:
         json_path = tmp_json.name
-                            })
     except KeyboardInterrupt:
         process.terminate()
         print_warning("Nuclei interrumpido por el usuario.")
