@@ -34,12 +34,20 @@ def run_nuclei_scan(target):
     try:
         for line in process.stdout:
             print(line, end='')
-            try:
-                data = json.loads(line)
-                if isinstance(data, dict) and data.get('templateID'):
-                    findings.append(data)
-            except Exception:
-                continue
+            # Intentar extraer datos clave de la salida de texto plano
+            # Ejemplo de línea: [info] [cves] [medium] http://target/path
+            if line.startswith("["):
+                parts = line.strip().split("] ")
+                if len(parts) >= 4:
+                    sev = parts[2].replace("[","").strip().lower()
+                    template = parts[1].replace("[","").strip()
+                    url = parts[3].strip()
+                    findings.append({
+                        "severity": sev,
+                        "template": template,
+                        "url": url,
+                        "raw": line.strip()
+                    })
     except KeyboardInterrupt:
         process.terminate()
         print_warning("Nuclei interrumpido por el usuario.")
@@ -48,8 +56,8 @@ def run_nuclei_scan(target):
     # Resumen agrupado por severidad y template
     summary = {}
     for f in findings:
-        sev = f.get('info', {}).get('severity', 'unknown')
-        tid = f.get('templateID', 'unknown')
+        sev = f.get('severity', 'unknown')
+        tid = f.get('template', 'unknown')
         summary.setdefault(sev, []).append(tid)
     print("\nResumen de vulnerabilidades:")
     for sev, tids in summary.items():
