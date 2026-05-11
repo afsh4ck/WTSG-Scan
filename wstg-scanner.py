@@ -516,13 +516,6 @@ def _html_escape(value):
     return html.escape(str(value), quote=True)
 
 def _build_html_report(report_data):
-        nuclei_summary = scan_data.get('nuclei_summary', {})
-        nuclei_html = ""
-        if nuclei_summary:
-            nuclei_html = "<div class='card' id='nuclei'><h3>Resumen Nuclei</h3><ul>"
-            for sev, tids in nuclei_summary.items():
-                nuclei_html += f"<li><b>{_html_escape(sev.upper())}</b>: {len(tids)} hallazgos ({', '.join(_html_escape(t) for t in tids)})</li>"
-            nuclei_html += "</ul></div>"
     """Genera reporte HTML con modo light/dark y secciones relevantes del escaneo."""
     scan_data = report_data.get("scan_data", {})
     findings = report_data.get("findings", [])
@@ -534,6 +527,14 @@ def _build_html_report(report_data):
     creds = scan_data.get("bruteforce_credentials", [])
     spider = scan_data.get("spider", {})
     meta = scan_data.get("stats", {})
+
+    nuclei_summary = scan_data.get('nuclei_summary', {})
+    nuclei_html = ""
+    if nuclei_summary:
+        nuclei_html = "<div class='card' id='nuclei'><h3>Resumen Nuclei</h3><ul>"
+        for sev, tids in nuclei_summary.items():
+            nuclei_html += f"<li><b>{_html_escape(sev.upper())}</b>: {len(tids)} hallazgos ({', '.join(_html_escape(t) for t in tids)})</li>"
+        nuclei_html += "</ul></div>"
 
     findings_items = "\n".join(
         f"<li>{_html_escape(item)}</li>" for item in findings
