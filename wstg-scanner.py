@@ -1068,6 +1068,14 @@ def dir_bruteforce(target, session, wordlist=None, threads=THREADS, use_ffuf=Tru
                 if process:
                     process.terminate()
                 print_warning("Fuzzing interrumpido por el usuario")
+                # Guardar resultados parciales en SCAN_DATA
+                try:
+                    from __main__ import SCAN_DATA
+                except ImportError:
+                    global SCAN_DATA
+                SCAN_DATA["directory_hits"] = results
+                print_good(f"Se han guardado {len(results)} directorios encontrados hasta el momento.")
+                return results
             except Exception as e:
                 print_error(f"Error ejecutando ffuf: {e}")
                 print_warning("Fallando a método interno...")
