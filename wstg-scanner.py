@@ -2,8 +2,9 @@
 # -*- coding: utf-8 -*-
 
 """
+OWASP Web Security Testing Scanner
 Web Security Testing (WSTG) Scanner - Interactive & Authenticated Edition
-Author: IA + @afsh4ck (banner)
+Author: afsh4ck
 Description: Full web spidering, directory fuzzing (ffuf with progress), injections, API tests, user enumeration & bruteforce.
 """
 
@@ -52,6 +53,7 @@ except ImportError:
     HAS_TQDM = False
 
 # ========== BANNER ==========
+DESCRIPTION = "OWASP Web Security Testing Scanner"
 BANNER = r"""
  _       __       __         _____                   
 | |     / /_____ / /_ ____ _/ ___/ _____ ____ _ ____ 
@@ -79,6 +81,10 @@ COMMON_DIRS = [
 
 SECLISTS_SMALL = "/usr/share/seclists/Discovery/Web-Content/directory-list-2.3-small.txt"
 SECLISTS_MEDIUM = "/usr/share/seclists/Discovery/Web-Content/directory-list-lowercase-2.3-medium.txt"
+SECLISTS_PASSWORDS = "/usr/share/seclists/Passwords/xato-net-10-million-passwords-10000.txt"
+DEFAULT_PASSWORDS = [
+    "123456", "password", "123456789", "12345", "12345678", "qwerty", "abc123", "admin", "letmein", "welcome"
+]
 
 # Payloads
 SQL_PAYLOADS = [
@@ -109,10 +115,6 @@ OPEN_REDIRECT = ["https://evil.com", "//evil.com", "/redirect?url=https://evil.c
 API_ENDPOINTS = [
     "/api", "/api/v1", "/v1", "/api/users", "/rest/users", "/graphql", "/swagger", "/swagger-ui.html",
     "/openapi.json", "/api-docs", "/v2/api-docs", "/v3/api-docs", "/actuator", "/health", "/metrics"
-]
-
-DEFAULT_PASSWORDS = [
-    "123456", "password", "123456789", "12345", "12345678", "qwerty", "abc123", "admin", "letmein", "welcome"
 ]
 
 LOGIN_PATHS = [
@@ -341,7 +343,6 @@ def dir_bruteforce(target, session, wordlist=None, threads=THREADS, use_ffuf=Tru
 
         if use_ffuf and check_ffuf() and wordlist and os.path.isfile(wordlist):
             print_info("Usando ffuf para fuzzing (rápido y eficiente) - mostrando progreso y resultados")
-            # Comando sin -s para obtener progreso, pero se filtra la salida
             ffuf_cmd = [
                 "ffuf", "-u", f"{target}/FUZZ", "-w", wordlist,
                 "-t", str(threads), "-fc", "404,403", "-ac"
@@ -353,22 +354,20 @@ def dir_bruteforce(target, session, wordlist=None, threads=THREADS, use_ffuf=Tru
                 for line in process.stdout:
                     # Mostrar progreso (líneas con "Progress:")
                     if "Progress:" in line:
-                        # Extraer el número actual y total
                         match = re.search(r'Progress:\s*(\d+)/(\d+)', line)
                         if match:
                             current = int(match.group(1))
                             total = int(match.group(2))
                             percent = (current / total) * 100 if total > 0 else 0
-                            # Mostrar solo si cambia el porcentaje (para no saturar)
                             new_progress = f"{current}/{total} ({percent:.1f}%)"
                             if new_progress != last_progress:
                                 last_progress = new_progress
                                 print_info(f"Progreso ffuf: {new_progress}")
-                    # Mostrar resultados de hallazgos (líneas que contienen "Status:" y no son comentarios)
-                    # Además, filtrar líneas que empiecen por '#' después de espacios
-                    stripped_line = line.lstrip()
-                    if "Status:" in line and not stripped_line.startswith('#'):
-                        print_vuln(line.strip())
+                    # Mostrar resultados: líneas que contienen "Status:" y que NO comienzan por '#' (espacios opcionales)
+                    if "Status:" in line:
+                        stripped = line.lstrip()
+                        if not stripped.startswith('#'):
+                            print_vuln(line.strip())
                 process.wait()
                 if process.returncode != 0 and process.returncode != 1:
                     print_error(f"ffuf terminó con código {process.returncode}")
@@ -383,7 +382,6 @@ def dir_bruteforce(target, session, wordlist=None, threads=THREADS, use_ffuf=Tru
         else:
             if use_ffuf and not check_ffuf():
                 print_warning("ffuf no está instalado. Usando método interno (más lento).")
-            # Método interno con barra de progreso (ya implementado)
             if wordlist is None:
                 paths = COMMON_DIRS
                 print_info(f"Usando lista interna reducida ({len(paths)} rutas)")
@@ -697,7 +695,7 @@ def test_user_enumeration_form(target, session):
 def bruteforce_login(target, session, usernames, passlist, max_threads=5):
     """
     Detecta formularios de login y realiza fuerza bruta.
-    Muestra progreso y resultado final.
+    Muestra progreso y resultado final sin duplicados.
     """
     try:
         if not usernames:
@@ -760,29 +758,59 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
                 print_info("Continuando sin bruteforce.")
                 return
         
+        # Cargar lista de contraseñas
         passwords = DEFAULT_PASSWORDS
         if passlist and os.path.isfile(passlist):
             with open(passlist, 'r') as f:
                 passwords = [line.strip() for line in f if line.strip()]
         elif passlist:
             print_warning(f"No se pudo leer {passlist}, usando lista por defecto.")
+        else:
+            # Si no se proporcionó wordlist, intentar usar la de SecLists
+            if os.path.exists(SECLISTS_PASSWORDS):
+                print_info(f"Usando wordlist de contraseñas por defecto: {SECLISTS_PASSWORDS}")
+                with open(SECLISTS_PASSWORDS, 'r') as f:
+                    passwords = [line.strip() for line in f if line.strip()]
+            else:
+                print_warning("No se encontró la wordlist de SecLists, usando lista pequeña por defecto.")
         
         total_combinations = len(usernames) * len(passwords)
         print_info(f"Iniciando bruteforce con {len(usernames)} usuarios y {len(passwords)} contraseñas (total {total_combinations} combinaciones)...")
         
-        found_credentials = []
+        found_credentials = set()  # Usar set para evitar duplicados
+        
+        def is_successful_login(response, form_url):
+            """Determina si la respuesta indica un login exitoso."""
+            # Redirección a página de dashboard, home, etc.
+            if response.status_code == 302:
+                location = response.headers.get('Location', '').lower()
+                if any(x in location for x in ['dashboard', 'home', 'admin', 'profile', 'account']):
+                    return True
+            # Contenido de la respuesta
+            content = response.text.lower()
+            success_indicators = [
+                'dashboard', 'welcome', 'logged in', 'login successful',
+                'redirect', 'profile', 'my account', 'logout'
+            ]
+            if any(indicator in content for indicator in success_indicators):
+                return True
+            # Comparar tamaño de respuesta con un intento fallido (heurística)
+            # (Esto es más complejo, lo dejamos como opción)
+            return False
         
         def try_cred(user, pwd):
             for form in login_forms:
                 data = {form['user_field']: user, form['pass_field']: pwd}
                 try:
+                    # Primero con allow_redirects=False para capturar redirecciones
                     resp = session.post(form['url'], data=data, timeout=DEFAULT_TIMEOUT, allow_redirects=False)
-                    if resp.status_code == 302 or "dashboard" in resp.url.lower() or "welcome" in resp.text.lower():
-                        found_credentials.append((user, pwd))
+                    if is_successful_login(resp, form['url']):
+                        found_credentials.add((user, pwd))
                         return True
-                    resp2 = session.post(form['url'], data=data, timeout=DEFAULT_TIMEOUT)
-                    if "dashboard" in resp2.url.lower() or "welcome" in resp2.text.lower():
-                        found_credentials.append((user, pwd))
+                    # Si no, seguir la redirección y comprobar el contenido final
+                    resp2 = session.post(form['url'], data=data, timeout=DEFAULT_TIMEOUT, allow_redirects=True)
+                    if is_successful_login(resp2, form['url']):
+                        found_credentials.add((user, pwd))
                         return True
                 except:
                     pass
@@ -984,9 +1012,11 @@ def spider_website(target, session, max_pages=500, max_depth=3, use_robots=True)
 def show_menu():
     clear_screen()
     if HAS_COLOR:
+        print(Fore.CYAN + DESCRIPTION + Style.RESET_ALL)
         print(Fore.CYAN + BANNER + Style.RESET_ALL)
         print(Fore.GREEN + DEVELOPER + Style.RESET_ALL + "\n")
     else:
+        print(DESCRIPTION)
         print(BANNER)
         print(DEVELOPER + "\n")
     print("="*50)
@@ -1080,7 +1110,7 @@ def run_user_enum_bruteforce(target, session):
     safe_execute(test_user_enumeration_form, target, session)
     want_brute = input("¿Desea realizar fuerza bruta de contraseñas? (s/n): ").strip().lower()
     if want_brute == 's':
-        passlist = input("Ruta a wordlist de contraseñas (dejar vacío para usar lista por defecto): ").strip()
+        passlist = input("Ruta a wordlist de contraseñas (dejar vacío para usar por defecto de SecLists): ").strip()
         if not users:
             users_input = input("Introduce usuarios separados por comas: ").strip()
             if users_input:
@@ -1130,9 +1160,11 @@ def main():
     global TARGET_URL, AUTHENTICATED, AUTH_SESSION
     clear_screen()
     if HAS_COLOR:
+        print(Fore.CYAN + DESCRIPTION + Style.RESET_ALL)
         print(Fore.CYAN + BANNER + Style.RESET_ALL)
         print(Fore.GREEN + DEVELOPER + Style.RESET_ALL + "\n")
     else:
+        print(DESCRIPTION)
         print(BANNER)
         print(DEVELOPER + "\n")
     
