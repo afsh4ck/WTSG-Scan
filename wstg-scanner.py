@@ -526,7 +526,17 @@ def run_nuclei_scan(target):
         'low': Fore.CYAN, 'info': Fore.WHITE, 'unknown': Fore.WHITE,
     }
 
-    normalized = [_extract(it) for it in findings]
+    # Deduplicar por (template_id, url, severity) — Nuclei puede emitir el mismo
+    # hallazgo varias veces (p. ej. headers de seguridad faltantes, uno por header).
+    normalized = []
+    seen_dedup = set()
+    for it in findings:
+        ext = _extract(it)
+        key = (ext['template_id'], ext['url'], ext['severity'])
+        if key in seen_dedup:
+            continue
+        seen_dedup.add(key)
+        normalized.append(ext)
     normalized.sort(key=lambda x: (SEV_ORDER.get(x['severity'], 99), x['template_id']))
 
     # Resumen por severidad
@@ -706,25 +716,70 @@ def _build_html_report(report_data):
             nuclei_html += "</tbody></table>"
         nuclei_html += "</div>"
 
-    findings_items = "\n".join(
-        f"<li>{_html_escape(item)}</li>" for item in findings
-    ) or "<li>Sin hallazgos.</li>"
+    # ── Hallazgos agrupados por categoría ───────────────────────────────
+    def _classify(item):
+        s = str(item)
+        if s.startswith('[NUCLEI:'):
+            try:
+                sev = s.split('[NUCLEI:', 1)[1].split(']', 1)[0].strip()
+            except Exception:
+                sev = 'INFO'
+            return f"Nuclei — {sev}"
+        if s.startswith('[VULN]'):
+            return "Vulnerabilidades"
+        if s.startswith('[DIR]'):
+            return "Directorios / Endpoints"
+        return "Otros"
+
+    CAT_ORDER = [
+        "Vulnerabilidades",
+        "Nuclei — CRITICAL", "Nuclei — HIGH", "Nuclei — MEDIUM",
+        "Nuclei — LOW", "Nuclei — INFO", "Nuclei — UNKNOWN",
+        "Directorios / Endpoints",
+        "Otros",
+    ]
+    grouped = {}
+    for item in findings:
+        grouped.setdefault(_classify(item), []).append(str(item))
+    if grouped:
+        sections = []
+        cats_present = [c for c in CAT_ORDER if c in grouped] + \
+                       [c for c in grouped if c not in CAT_ORDER]
+        for cat in cats_present:
+            items = grouped[cat]
+            section = (
+                f"<details open><summary><b>{_html_escape(cat)}</b> "
+                f"<span class='muted'>({len(items)})</span></summary><ul>"
+                + "\n".join(f"<li>{_html_escape(i)}</li>" for i in items)
+                + "</ul></details>"
+            )
+            sections.append(section)
+        findings_items = "\n".join(sections)
+    else:
+        findings_items = "<span class='muted'>Sin hallazgos.</span>"
+
+    # ── Tecnologías como chips agrupados (más legibles) ────────────────
     if technologies:
         if isinstance(technologies[0], dict):
-            # Detectar todas las claves presentes
-            all_keys = set()
+            chips = []
             for t in technologies:
-                all_keys.update(t.keys())
-            # Siempre mostrar 'name' y 'detail' primero si existen
-            ordered_keys = [k for k in ('name','detail') if k in all_keys] + [k for k in sorted(all_keys) if k not in ('name','detail')]
-            technologies_html = "<table class='tech-list'><thead><tr>" + ''.join(f"<th>{_html_escape(k.capitalize())}</th>" for k in ordered_keys) + "</tr></thead><tbody>"
-            for t in technologies:
-                technologies_html += "<tr>" + ''.join(f"<td>{_html_escape(str(t.get(k,'')))}</td>" for k in ordered_keys) + "</tr>"
-            technologies_html += "</tbody></table>"
+                name = _html_escape(str(t.get('name', '')).strip())
+                detail = _html_escape(str(t.get('detail', '')).strip())
+                if not name:
+                    continue
+                if detail:
+                    chips.append(
+                        f"<span class='tech-chip'><b>{name}</b>"
+                        f"<span class='tech-detail'>{detail}</span></span>"
+                    )
+                else:
+                    chips.append(f"<span class='tech-chip'><b>{name}</b></span>")
+            technologies_html = "<div class='tech-grid'>" + "".join(chips) + "</div>"
         else:
-            technologies_html = "<ul class='tech-list'>" + "\n".join(
-                f"<li><span class='tag'>{_html_escape(str(t))}</span></li>" for t in technologies
-            ) + "</ul>"
+            technologies_html = "<div class='tech-grid'>" + "".join(
+                f"<span class='tech-chip'><b>{_html_escape(str(t))}</b></span>"
+                for t in technologies
+            ) + "</div>"
     else:
         technologies_html = "<span class='muted'>No detectadas</span>"
     users_html = "<ul class='user-list'>" + "\n".join(
@@ -828,6 +883,14 @@ def _build_html_report(report_data):
         pre {{ background:var(--code); border:1px solid var(--border); border-radius:10px; padding:10px; overflow:auto; }}
         .tech-list, .user-list, .email-list {{ list-style:none; padding:0; margin:0; display:flex; flex-wrap:wrap; gap:0; }}
         .tech-list li, .user-list li, .email-list li {{ margin:0 8px 4px 0; }}
+        .tech-grid {{ display:flex; flex-wrap:wrap; gap:8px; margin-top:6px; }}
+        .tech-chip {{ display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border-radius:999px; background:var(--tag); border:1px solid var(--border); font-size:.9rem; }}
+        .tech-chip b {{ color:var(--accent); font-weight:600; }}
+        .tech-detail {{ background:var(--code); padding:2px 8px; border-radius:999px; font-size:.8rem; color:var(--muted); font-family:Consolas,monospace; }}
+        details {{ margin-bottom:10px; }}
+        details summary {{ cursor:pointer; padding:6px 0; font-size:1rem; user-select:none; }}
+        details summary:hover {{ color:var(--accent); }}
+        details ul {{ margin:6px 0 6px 18px; }}
         .target-card {{ display:flex; align-items:center; gap:18px; }}
         .target-icon {{ font-size:2.2rem; color:var(--accent); margin-right:8px; }}
         .target-meta {{ font-size:1.1rem; color:var(--muted); }}
@@ -2329,32 +2392,38 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
                 post_data += f"&{k}={v}"
             # Mensaje de error personalizado
             fail_flag = error_msg if error_msg else "login failed"
+            # -t 4: limitar concurrencia (evita duplicados por race entre workers)
+            # -I  : ignorar restorefile previo (sin esperar 10s)
+            # -u  : recorrer usuarios primero por contraseña (mejor cobertura)
             hydra_cmd = [
                 "hydra", "-L", ufile_path, "-P", pfile_path,
+                "-t", "4", "-I", "-u",
                 host,
                 "http-post-form",
                 f"{path}:{post_data}:{fail_flag}"
             ]
             print_info(f"Ejecutando hydra: {' '.join(hydra_cmd)}")
+            seen_creds = set()
             try:
                 process = subprocess.Popen(hydra_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
                 for line in process.stdout:
                     print(line, end='')
-                    # Buscar credenciales en cualquier línea relevante
                     if ("login:" in line and "password:" in line):
-                        # Captura flexible: login:<user> password:<pass> (con cualquier espacio/tab)
-                        m = re.search(r'login:\s*([^\s]+)\s*password:\s*([^\s]+)', line)
+                        m = re.search(r'login:\s*(\S+)\s*password:\s*(\S+)', line)
                         if m:
                             user, pwd = m.group(1), m.group(2)
-                            result_data["credentials"].append({"username": user, "password": pwd})
                         else:
-                            # Captura aún más flexible: buscar palabras login y password y extraer lo que sigue
                             login_idx = line.find("login:")
                             pass_idx = line.find("password:")
-                            if login_idx != -1 and pass_idx != -1:
-                                user = line[login_idx+len("login:"):pass_idx].strip().split()[0]
-                                pwd = line[pass_idx+len("password:"):].strip().split()[0]
-                                result_data["credentials"].append({"username": user, "password": pwd})
+                            if login_idx == -1 or pass_idx == -1:
+                                continue
+                            user = line[login_idx+len("login:"):pass_idx].strip().split()[0]
+                            pwd = line[pass_idx+len("password:"):].strip().split()[0]
+                        # Deduplicar (hydra puede reportar el mismo par 2+ veces)
+                        if (user, pwd) in seen_creds:
+                            continue
+                        seen_creds.add((user, pwd))
+                        result_data["credentials"].append({"username": user, "password": pwd})
                 process.wait()
                 print_info("Hydra finalizado.")
             except Exception as e:
@@ -2365,7 +2434,21 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
                     os.unlink(pfile_path)
                 except Exception:
                     pass
-            return result_data
+
+            # Verificar credenciales con el método interno (sesión real)
+            # para detectar usuarios que hydra no encontró por CSRF/cookies/rate-limit.
+            usernames_pendientes = [u for u in usernames if u not in {c["username"] for c in result_data["credentials"]}]
+            if usernames_pendientes:
+                print_info(
+                    f"Hydra no encontró credenciales para {len(usernames_pendientes)} usuario(s) "
+                    f"({', '.join(usernames_pendientes)}). Reintentando con sesión real (CSRF-aware)..."
+                )
+                # Cae al método interno con la lista reducida
+                usernames = usernames_pendientes
+                total_combinations = len(usernames) * len(passwords)
+                result_data["total_combinations"] = (result_data.get("total_combinations") or 0) + total_combinations
+            else:
+                return result_data
 
         # --- Método interno clásico ---
         print_info(f"Iniciando bruteforce con {len(usernames)} usuarios y {len(passwords)} contraseñas (total {total_combinations} combinaciones)...")
@@ -2505,13 +2588,16 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
                         print_info(f"Progreso bruteforce: {completed}/{total_combinations} combinaciones probadas")
                     future.result()
 
-        if found_credentials:
-            print_good(f"Bruteforce completado. Credenciales encontradas: {len(found_credentials)}")
-            for user, pwd in found_credentials:
+        # Combinar con credenciales previas (p. ej. encontradas por hydra antes del fallback)
+        prev_creds = {(c["username"], c["password"]) for c in result_data.get("credentials", [])}
+        all_creds = prev_creds | found_credentials
+        if all_creds:
+            print_good(f"Bruteforce completado. Credenciales únicas encontradas: {len(all_creds)}")
+            for user, pwd in sorted(all_creds):
                 print_vuln(f"  {user}:{pwd}")
             result_data["credentials"] = [
                 {"username": user, "password": pwd}
-                for user, pwd in sorted(found_credentials)
+                for user, pwd in sorted(all_creds)
             ]
         else:
             print_info("Bruteforce completado. No se encontraron credenciales válidas.")
