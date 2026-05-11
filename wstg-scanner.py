@@ -435,27 +435,31 @@ def run_nuclei_scan(target):
         with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as tmp_json:
             json_path = tmp_json.name
         # Usamos -jsonl-export (jsonlines, una línea JSON por hallazgo) para robustez.
-        cmd = [nuclei_path, "-u", target, "-jsonl-export", json_path, "-silent=false"]
+        cmd = [nuclei_path, "-u", target, "-jsonl-export", json_path]
         # IMPORTANTE: stdout en modo binario para evitar UnicodeDecodeError con
         # banners/símbolos no-UTF8 que emite Nuclei. Decodificamos tolerante.
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
-        for raw_line in iter(process.stdout.readline, b""):
-            try:
-                print(raw_line.decode("utf-8", errors="replace"), end='')
-            except Exception:
-                pass
+        # Filtramos líneas ruidosas del backend Interactsh (bytes corruptos en stderr).
+        NOISE_PATTERNS = (
+            b"Could not unmarshal interaction data",
+        )
+        def _stream(proc):
+            for raw_line in iter(proc.stdout.readline, b""):
+                if any(pat in raw_line for pat in NOISE_PATTERNS):
+                    continue
+                try:
+                    print(raw_line.decode("utf-8", errors="replace"), end='')
+                except Exception:
+                    pass
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        _stream(process)
         process.wait()
 
         # Si la versión de Nuclei no soporta -jsonl-export, reintentar con -json-export
         if (not os.path.isfile(json_path) or os.path.getsize(json_path) == 0):
             try:
                 cmd_alt = [nuclei_path, "-u", target, "-json-export", json_path]
-                proc2 = subprocess.Popen(cmd_alt, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
-                for raw_line in iter(proc2.stdout.readline, b""):
-                    try:
-                        print(raw_line.decode("utf-8", errors="replace"), end='')
-                    except Exception:
-                        pass
+                proc2 = subprocess.Popen(cmd_alt, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                _stream(proc2)
                 proc2.wait()
             except Exception:
                 pass
@@ -532,17 +536,23 @@ def run_nuclei_scan(target):
 
     print_info(f"Total vulnerabilidades detectadas por Nuclei: {len(normalized)}")
     if normalized:
-        # Tabla resumen por severidad
-        print("\nResumen de vulnerabilidades por severidad:")
-        print("+------------+----------+-------------------------+")
-        print("| Severidad  | Cantidad | Templates únicos        |")
-        print("+------------+----------+-------------------------+")
+        # Tabla resumen por severidad con anchos dinámicos
+        sev_col = max(len("Severidad"), max(len(s) for s in summary.keys()))
+        qty_col = max(len("Cantidad"), max(len(str(len(t))) for t in summary.values()))
+        rows = []
         for sev in sorted(summary.keys(), key=lambda s: SEV_ORDER.get(s, 99)):
-            tids = summary[sev]
-            unique_str = ', '.join(sorted(set(tids)))
-            display = unique_str[:40] + ('...' if len(unique_str) > 40 else '')
-            print(f"| {sev.upper():<10} | {len(tids):<8} | {display:<23} |")
-        print("+------------+----------+-------------------------+")
+            unique_str = ', '.join(sorted(set(summary[sev])))
+            display = unique_str if len(unique_str) <= 100 else unique_str[:97] + '...'
+            rows.append((sev.upper(), str(len(summary[sev])), display))
+        tpl_col = max(len("Templates únicos"), max(len(r[2]) for r in rows))
+        sep = "+" + "-" * (sev_col + 2) + "+" + "-" * (qty_col + 2) + "+" + "-" * (tpl_col + 2) + "+"
+        print("\nResumen de vulnerabilidades por severidad:")
+        print(sep)
+        print(f"| {'Severidad':<{sev_col}} | {'Cantidad':<{qty_col}} | {'Templates únicos':<{tpl_col}} |")
+        print(sep)
+        for sev_str, qty_str, tpl_str in rows:
+            print(f"| {sev_str:<{sev_col}} | {qty_str:<{qty_col}} | {tpl_str:<{tpl_col}} |")
+        print(sep)
 
         # Detalle por hallazgo (solo severidades relevantes en consola)
         relevant = [n for n in normalized if n['severity'] in ('critical', 'high', 'medium', 'low')]
