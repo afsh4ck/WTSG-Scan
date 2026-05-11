@@ -9,6 +9,7 @@ Description: Full web spidering, directory fuzzing (ffuf with progress), injecti
 """
 
 import argparse
+import base64
 import getpass
 import re
 import sys
@@ -121,8 +122,48 @@ COMMAND_INJECT = [
 OPEN_REDIRECT = ["https://evil.com", "//evil.com", "/redirect?url=https://evil.com"]
 
 API_ENDPOINTS = [
-    "/api", "/api/v1", "/v1", "/api/users", "/rest/users", "/graphql", "/swagger", "/swagger-ui.html",
-    "/openapi.json", "/api-docs", "/v2/api-docs", "/v3/api-docs", "/actuator", "/health", "/metrics"
+    # Raíces de API
+    "/api", "/api/v1", "/api/v2", "/api/v3",
+    "/v1", "/v2", "/v3", "/rest", "/rest/v1",
+    # Recursos comunes
+    "/api/users", "/api/user", "/api/accounts", "/api/account",
+    "/api/admin", "/api/me", "/api/profile", "/api/whoami",
+    "/api/config", "/api/settings", "/api/flags", "/api/data",
+    "/api/keys", "/api/tokens", "/api/secrets", "/api/credentials",
+    "/api/debug", "/api/test", "/api/internal",
+    "/rest/users", "/rest/user", "/rest/admin", "/rest/profile",
+    # Documentación OpenAPI / Swagger
+    "/swagger", "/swagger-ui.html", "/swagger-ui/", "/swagger.json", "/swagger.yaml",
+    "/openapi.json", "/openapi.yaml",
+    "/api-docs", "/v2/api-docs", "/v3/api-docs",
+    "/redoc", "/docs", "/api/docs", "/api/swagger",
+    # GraphQL
+    "/graphql", "/graphiql", "/api/graphql", "/query", "/api/query",
+    # Spring Actuator / monitoring
+    "/actuator", "/actuator/env", "/actuator/health", "/actuator/mappings",
+    "/actuator/beans", "/actuator/httptrace", "/actuator/loggers",
+    "/health", "/metrics", "/info", "/status", "/ping",
+    # Rutas de autenticación
+    "/api/auth", "/api/login", "/api/token", "/api/refresh",
+    "/api/register", "/api/signup",
+    # Rutas sensibles
+    "/.well-known/", "/api/version", "/api/changelog",
+    "/console", "/api/console", "/h2-console",
+]
+
+MASS_ASSIGNMENT_FIELDS = [
+    {"is_admin": True},
+    {"role": "admin"},
+    {"admin": True},
+    {"isAdmin": True},
+    {"privilege": "admin"},
+    {"user_role": "administrator"},
+    {"account_type": "premium"},
+    {"verified": True},
+    {"status": "active"},
+    {"credits": 9999},
+    {"balance": 9999},
+    {"permissions": ["admin", "superuser"]},
 ]
 
 LOGIN_PATHS = [
@@ -661,16 +702,360 @@ def check_ssl_tls(target):
     except Exception as e:
         print_error(f"SSL/TLS error: {e}")
 
-def test_cors(target, session):
+def test_cors_advanced(target, session):
+    """OWASP API8 / WSTG-CLNT-007: Verifica configuraciones CORS inseguras."""
     try:
-        resp = session.get(target, timeout=DEFAULT_TIMEOUT, headers={'Origin': 'https://evil.com'})
-        acao = resp.headers.get('Access-Control-Allow-Origin')
-        if acao == '*':
-            print_warning("CORS permite cualquier origen (*)")
-        elif acao and acao != target:
-            print_vuln(f"CORS refleja origen no confiable: {acao}")
+        parsed = urlparse(target)
+        evil_origins = [
+            "https://evil.com",
+            "null",
+            f"https://{parsed.netloc}.evil.com",
+            f"https://evil.{parsed.netloc}",
+        ]
+        for origin in evil_origins:
+            try:
+                resp = session.get(target, timeout=DEFAULT_TIMEOUT, headers={'Origin': origin})
+                acao = resp.headers.get('Access-Control-Allow-Origin', '')
+                acac = resp.headers.get('Access-Control-Allow-Credentials', '').lower()
+                if acao == '*' and acac == 'true':
+                    print_vuln(f"CORS crítico: wildcard + Allow-Credentials=true [{origin}]")
+                elif acao == origin:
+                    if acac == 'true':
+                        print_vuln(f"CORS: origen reflejado con credenciales permitidas -> {origin}")
+                    else:
+                        print_warning(f"CORS: origen reflejado sin credenciales -> {origin}")
+                elif acao == '*':
+                    print_warning("CORS: wildcard (*) sin Allow-Credentials")
+                # Verificar preflight OPTIONS
+                try:
+                    pre = session.options(target, timeout=DEFAULT_TIMEOUT, headers={
+                        'Origin': origin,
+                        'Access-Control-Request-Method': 'POST',
+                        'Access-Control-Request-Headers': 'Authorization',
+                    })
+                    pre_acao = pre.headers.get('Access-Control-Allow-Origin', '')
+                    if pre_acao == origin or pre_acao == '*':
+                        print_info(f"  Preflight CORS acepta POST+Authorization desde {origin}")
+                except Exception:
+                    pass
+            except Exception:
+                pass
     except Exception as e:
-        print_error(f"Error en test CORS: {e}")
+        print_error(f"Error en test CORS avanzado: {e}")
+
+
+# ========== API PENTESTING (OWASP API Top 10) ==========
+
+def discover_api_endpoints(target, session):
+    """OWASP API9: Descubre endpoints expuestos y analiza documentación OpenAPI/Swagger."""
+    found = []
+    try:
+        print_info(f"Escaneando {len(API_ENDPOINTS)} rutas de API conocidas...")
+        for ep in API_ENDPOINTS:
+            url = urljoin(target, ep)
+            try:
+                resp = session.get(url, timeout=DEFAULT_TIMEOUT)
+                ct = resp.headers.get('Content-Type', '').split(';')[0].strip()
+                if resp.status_code == 200:
+                    print_good(f"[200] {url}  ({ct})")
+                    found.append({'url': url, 'endpoint': ep, 'status': 200, 'content_type': ct})
+                    # Extraer rutas desde Swagger/OpenAPI
+                    if any(x in ep for x in ('swagger', 'openapi', 'api-docs')):
+                        try:
+                            doc = resp.json()
+                            paths = list(doc.get('paths', {}).keys())
+                            if paths:
+                                print_info(f"  Rutas documentadas ({len(paths)}): {', '.join(paths[:12])}")
+                                for path in paths:
+                                    extra_url = urljoin(target, path)
+                                    found.append({'url': extra_url, 'endpoint': path,
+                                                  'status': 0, 'content_type': ''})
+                        except Exception:
+                            pass
+                elif resp.status_code == 401:
+                    print_warning(f"[401] {url}  (requiere autenticación)")
+                    found.append({'url': url, 'endpoint': ep, 'status': 401, 'content_type': ct})
+                elif resp.status_code == 403:
+                    print_warning(f"[403] {url}  (prohibido)")
+                    found.append({'url': url, 'endpoint': ep, 'status': 403, 'content_type': ct})
+            except Exception:
+                pass
+        print_info(f"Total endpoints API encontrados/accesibles: {len(found)}")
+    except Exception as e:
+        print_error(f"Error descubriendo endpoints: {e}")
+    return found
+
+
+def test_api_auth_bypass(found_endpoints, session):
+    """OWASP API5/BFLA: Detecta endpoints restringidos accesibles sin autenticación."""
+    try:
+        unauth_session = get_session()
+        bypass_headers_list = [
+            {'X-Original-URL': '/admin'},
+            {'X-Rewrite-URL': '/admin'},
+            {'X-Custom-IP-Authorization': '127.0.0.1'},
+            {'X-Forwarded-For': '127.0.0.1'},
+            {'X-Remote-IP': '127.0.0.1'},
+            {'X-Client-IP': '127.0.0.1'},
+        ]
+        restricted = [item for item in found_endpoints if item['status'] in (401, 403)]
+        if not restricted:
+            print_info("Sin endpoints restringidos encontrados para probar bypass.")
+            return
+        for item in restricted:
+            url = item['url']
+            try:
+                resp = unauth_session.get(url, timeout=DEFAULT_TIMEOUT)
+                if resp.status_code == 200 and len(resp.content) > 50:
+                    print_vuln(f"BFLA: accesible sin auth -> {url}")
+                    continue
+            except Exception:
+                pass
+            for hdrs in bypass_headers_list:
+                try:
+                    resp = unauth_session.get(url, timeout=DEFAULT_TIMEOUT, headers=hdrs)
+                    if resp.status_code == 200:
+                        print_vuln(f"Auth bypass con {list(hdrs.keys())[0]} en {url}")
+                        break
+                except Exception:
+                    pass
+    except Exception as e:
+        print_error(f"Error en test auth bypass: {e}")
+
+
+def test_api_idor(found_endpoints, session):
+    """OWASP API1/BOLA: Prueba IDOR modificando IDs en rutas y query params."""
+    try:
+        id_patterns = [
+            (r'((?:/[a-zA-Z_-]+)/)(\d{1,10})(/|$)', 2),
+            (r'([?&](?:id|user_id|uid|account_id|object_id)=)(\d+)', 2),
+            (r'((?:/[a-zA-Z_-]+)/)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', 2),
+        ]
+        alt_ids = ['0', '1', '2', '-1', '9999', '../1']
+        tested = set()
+        hits = 0
+        for item in found_endpoints:
+            url = item['url']
+            for pattern, group in id_patterns:
+                match = re.search(pattern, url)
+                if not match:
+                    continue
+                original_id = match.group(group)
+                prefix = url[:match.start(group)]
+                suffix = url[match.end(group):]
+                try:
+                    base_resp = session.get(url, timeout=DEFAULT_TIMEOUT)
+                    if base_resp.status_code != 200:
+                        continue
+                    base_len = len(base_resp.content)
+                except Exception:
+                    continue
+                for alt in alt_ids:
+                    if alt == original_id:
+                        continue
+                    test_url = prefix + alt + suffix
+                    if test_url in tested:
+                        continue
+                    tested.add(test_url)
+                    try:
+                        resp = session.get(test_url, timeout=DEFAULT_TIMEOUT)
+                        if resp.status_code == 200 and base_len > 0:
+                            diff_ratio = abs(len(resp.content) - base_len) / base_len
+                            if diff_ratio < 0.4:
+                                print_vuln(f"IDOR: {url} -> ID={alt} devuelve {resp.status_code} "
+                                           f"({len(resp.content)}B, ratio_diff={diff_ratio:.2f})")
+                                hits += 1
+                    except Exception:
+                        pass
+        if hits == 0:
+            print_info("Sin evidencias claras de IDOR en los endpoints encontrados.")
+    except Exception as e:
+        print_error(f"Error en test IDOR: {e}")
+
+
+def test_api_mass_assignment(found_endpoints, session):
+    """OWASP API6: Inyecta campos privilegiados en endpoints que aceptan JSON."""
+    try:
+        targets = [item for item in found_endpoints
+                   if item['status'] in (200, 201, 0)
+                   and any(x in item['endpoint'] for x in
+                           ('user', 'profile', 'account', 'register', 'update', 'me', 'signup'))]
+        if not targets:
+            print_info("Sin endpoints candidatos a Mass Assignment.")
+            return
+        method_map = [('POST', 'post'), ('PUT', 'put'), ('PATCH', 'patch')]
+        for item in targets:
+            url = item['url']
+            for fields in MASS_ASSIGNMENT_FIELDS[:6]:
+                for method_name, method_attr in method_map:
+                    try:
+                        method = getattr(session, method_attr)
+                        resp = method(url, json=fields, timeout=DEFAULT_TIMEOUT)
+                        if resp.status_code in (200, 201, 202, 204):
+                            key = list(fields.keys())[0]
+                            resp_lower = resp.text.lower()
+                            if key in resp_lower or 'admin' in resp_lower or 'success' in resp_lower:
+                                print_vuln(f"Mass Assignment en {url} [{method_name}] con {fields}")
+                                break
+                    except Exception:
+                        pass
+    except Exception as e:
+        print_error(f"Error en test Mass Assignment: {e}")
+
+
+def test_graphql(target, session):
+    """OWASP API8: Introspección GraphQL habilitada y queries peligrosas."""
+    try:
+        gql_endpoints = [urljoin(target, ep)
+                         for ep in ('/graphql', '/graphiql', '/api/graphql', '/query', '/api/query')]
+        introspection = {'query': '{ __schema { types { name } } }'}
+        user_enum = {'query': '{ users { id username email password } }'}
+        found_any = False
+        for gql_url in gql_endpoints:
+            try:
+                resp = session.post(gql_url, json=introspection,
+                                    headers={'Content-Type': 'application/json'},
+                                    timeout=DEFAULT_TIMEOUT)
+                if resp.status_code != 200:
+                    continue
+                data = resp.json()
+                if 'data' in data and '__schema' in str(data.get('data', {})):
+                    found_any = True
+                    print_vuln(f"GraphQL Introspección habilitada: {gql_url}")
+                    types = [t['name'] for t in data['data']['__schema']['types']
+                             if not t['name'].startswith('__')]
+                    print_info(f"  Tipos expuestos ({len(types)}): {', '.join(types[:15])}")
+                elif 'errors' not in data:
+                    found_any = True
+                    print_warning(f"GraphQL activo (introspección deshabilitada): {gql_url}")
+                if found_any:
+                    try:
+                        r2 = session.post(gql_url, json=user_enum,
+                                          headers={'Content-Type': 'application/json'},
+                                          timeout=DEFAULT_TIMEOUT)
+                        d2 = r2.json()
+                        if 'data' in d2 and d2['data'] and 'users' in str(d2['data']):
+                            print_vuln(f"GraphQL expone listado de usuarios en {gql_url}")
+                    except Exception:
+                        pass
+                    break
+            except Exception:
+                pass
+        if not found_any:
+            print_info("Sin endpoints GraphQL detectados o activos.")
+    except Exception as e:
+        print_error(f"Error en test GraphQL: {e}")
+
+
+def test_api_verbose_errors(found_endpoints, session):
+    """OWASP API7: Detecta respuestas de error con información interna expuesta."""
+    try:
+        error_payloads = ["'", '"', '{}', '-1', '../', '%00']
+        sensitive_patterns = [
+            re.compile(r'exception|traceback|stack.?trace|at \w+\.java:\d+', re.I),
+            re.compile(r'sql(?:state)?|mysql|postgresql|sqlite|ora-\d{4,5}', re.I),
+            re.compile(r'internal.?server.?error|unhandled.?exception|fatal.?error', re.I),
+            re.compile(r'/var/www|c:\\\\inetpub|/home/\w+/|/etc/passwd', re.I),
+        ]
+        hits = 0
+        for item in found_endpoints:
+            if item['status'] not in (200, 0):
+                continue
+            url = item['url']
+            for payload in error_payloads[:4]:
+                test_url = url.rstrip('/') + payload
+                try:
+                    resp = session.get(test_url, timeout=DEFAULT_TIMEOUT)
+                    if resp.status_code in (500, 503):
+                        for pat in sensitive_patterns:
+                            if pat.search(resp.text):
+                                print_vuln(f"Error verbose [{resp.status_code}]: {test_url}")
+                                hits += 1
+                                break
+                except Exception:
+                    pass
+        if hits == 0:
+            print_info("Sin errores verbose detectados en los endpoints probados.")
+    except Exception as e:
+        print_error(f"Error en test verbose errors: {e}")
+
+
+def test_api_rate_limiting(target, session):
+    """OWASP API4: Verifica si existe rate limiting en endpoints de autenticación."""
+    try:
+        candidates = [
+            urljoin(target, '/api/v1/login'),
+            urljoin(target, '/api/login'),
+            urljoin(target, '/api/auth'),
+            urljoin(target, '/login'),
+        ]
+        for test_url in candidates:
+            statuses = []
+            for _ in range(20):
+                try:
+                    resp = session.post(test_url,
+                                        json={'username': 'test', 'password': 'test'},
+                                        timeout=DEFAULT_TIMEOUT)
+                    statuses.append(resp.status_code)
+                    if resp.status_code == 429:
+                        break
+                except Exception:
+                    break
+            if not statuses:
+                continue
+            if 429 in statuses:
+                print_good(f"Rate limiting activo (HTTP 429) en {test_url}")
+            elif all(s not in (429, 503) for s in statuses):
+                print_warning(f"Sin rate limiting: {len(statuses)} requests sin bloqueo en {test_url}")
+            break
+    except Exception as e:
+        print_error(f"Error en test rate limiting: {e}")
+
+
+def test_jwt_tokens(target, session):
+    """OWASP API2: Detecta JWT en cabeceras/cookies y analiza algoritmo y campos."""
+    try:
+        resp = session.get(target, timeout=DEFAULT_TIMEOUT)
+        jwt_regex = re.compile(r'eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*')
+        jwt_candidates = set()
+        for header_val in resp.headers.values():
+            jwt_candidates.update(jwt_regex.findall(header_val))
+        for cookie in resp.cookies:
+            jwt_candidates.update(jwt_regex.findall(cookie.value))
+        if not jwt_candidates:
+            print_info("Sin JWT detectados en cabeceras/cookies de la página principal.")
+            return
+        for jwt in jwt_candidates:
+            try:
+                parts = jwt.split('.')
+                if len(parts) < 3:
+                    continue
+                def _b64_decode(s):
+                    s += '=' * (4 - len(s) % 4)
+                    return json.loads(base64.urlsafe_b64decode(s).decode('utf-8', errors='ignore'))
+                header_data = _b64_decode(parts[0])
+                payload_data = _b64_decode(parts[1])
+                alg = header_data.get('alg', '').upper()
+                print_info(f"JWT detectado — alg: {alg}  kid: {header_data.get('kid', 'N/A')}")
+                if alg in ('NONE', ''):
+                    print_vuln("JWT con alg:none — firma ignorada completamente")
+                elif alg in ('HS256', 'HS384', 'HS512'):
+                    print_warning(f"JWT HMAC ({alg}) — revisar secreto débil manualmente")
+                sensitive_keys = {'admin', 'role', 'is_admin', 'permission', 'privilege', 'scope'}
+                exposed = [k for k in payload_data if k.lower() in sensitive_keys]
+                if exposed:
+                    print_warning(f"  JWT contiene campos de privilegio: {exposed}")
+                    for k in exposed:
+                        print_info(f"    {k} = {payload_data[k]}")
+                exp = payload_data.get('exp')
+                if exp and exp < time.time():
+                    print_warning("  JWT caducado todavía aceptado por el servidor")
+            except Exception:
+                pass
+    except Exception as e:
+        print_error(f"Error en test JWT: {e}")
+
+
 
 def enumerate_users_from_endpoints(target, session):
     try:
@@ -889,55 +1274,6 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
     except Exception as e:
         print_error(f"Error en bruteforce: {e}")
 
-def discover_api_endpoints(target, session):
-    try:
-        found = []
-        for ep in API_ENDPOINTS:
-            url = urljoin(target, ep)
-            try:
-                resp = session.get(url, timeout=DEFAULT_TIMEOUT)
-                if resp.status_code < 400:
-                    print_good(f"Endpoint API: {url}")
-                    found.append(url)
-                    if 'swagger' in ep or 'openapi' in ep:
-                        try:
-                            doc = resp.json()
-                            print_info(f"  Documentación API: {list(doc.get('paths', {}).keys())}")
-                        except:
-                            pass
-            except:
-                pass
-        for cand in found:
-            if re.search(r'/[0-9]+', cand):
-                modified = re.sub(r'[0-9]+', '999999', cand)
-                if modified != cand:
-                    try:
-                        resp = session.get(modified, timeout=DEFAULT_TIMEOUT)
-                        if resp.status_code == 200:
-                            print_vuln(f"Posible IDOR en {cand}")
-                    except:
-                        pass
-        for ep in found:
-            if 'user' in ep or 'profile' in ep:
-                extra = {'is_admin': True, 'role': 'admin'}
-                try:
-                    resp = session.post(ep, json=extra, timeout=DEFAULT_TIMEOUT)
-                    if resp.status_code in [200,201,202]:
-                        print_vuln(f"Posible Mass Assignment en {ep}")
-                except:
-                    pass
-        if found:
-            test_url = found[0] + "'"
-            try:
-                resp = session.get(test_url, timeout=DEFAULT_TIMEOUT)
-                if resp.status_code == 500 and ('exception' in resp.text.lower() or 'stack trace' in resp.text.lower()):
-                    print_vuln(f"Error verbose expuesto en {test_url}")
-            except:
-                pass
-    except Exception as e:
-        print_error(f"Error en pruebas de API: {e}")
-
-# ========== SPIDER / SITE MAPPING ==========
 def spider_website(target, session, max_pages=500, max_depth=3, use_robots=True):
     print_info(f"Iniciando spidering en {target} (máx páginas: {max_pages}, profundidad: {max_depth})")
     base_parsed = urlparse(target)
@@ -1091,7 +1427,7 @@ def run_information_gathering(target, session):
             safe_execute(check_info_disclosure, resp.text)
         safe_execute(check_directory_listing, target, session)
         safe_execute(check_ssl_tls, target)
-        safe_execute(test_cors, target, session)
+        safe_execute(test_cors_advanced, target, session)
 
 def run_directory_fuzzing(target, session):
     print_info("=== FUZZING DE DIRECTORIOS ===")
@@ -1140,8 +1476,27 @@ def run_injection_tests(target, session):
                     safe_execute(test_open_redirect, form_url, inp, session, 'GET')
 
 def run_api_tests(target, session):
-    print_info("=== PRUEBAS DE API ===")
-    safe_execute(discover_api_endpoints, target, session)
+    print_info("=== PRUEBAS DE API (OWASP API Top 10) ===")
+    print_info("[1/7] Descubrimiento de endpoints...")
+    found = safe_execute(discover_api_endpoints, target, session) or []
+    print_info("[2/7] CORS avanzado...")
+    safe_execute(test_cors_advanced, target, session)
+    print_info("[3/7] GraphQL introspección...")
+    safe_execute(test_graphql, target, session)
+    print_info("[4/7] JWT & autenticación...")
+    safe_execute(test_jwt_tokens, target, session)
+    if found:
+        print_info("[5/7] IDOR / BOLA...")
+        safe_execute(test_api_idor, found, session)
+        print_info("[6/7] Mass Assignment...")
+        safe_execute(test_api_mass_assignment, found, session)
+        print_info("[7/7] Errores verbose + Auth bypass...")
+        safe_execute(test_api_verbose_errors, found, session)
+        safe_execute(test_api_auth_bypass, found, session)
+    else:
+        print_info("[5-7/7] Saltando tests de endpoints (ninguno encontrado).")
+    safe_execute(test_api_rate_limiting, target, session)
+    print_good("Pruebas de API completadas.")
 
 def run_user_enum_bruteforce(target, session):
     print_info("=== ENUMERACIÓN DE USUARIOS Y BRUTEFORCE ===")
