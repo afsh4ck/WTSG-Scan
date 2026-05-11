@@ -421,14 +421,6 @@ def dir_bruteforce(target, session, wordlist=None, threads=THREADS, use_ffuf=Tru
             wordlist = None
 
         if use_ffuf and check_ffuf() and wordlist and os.path.isfile(wordlist):
-            # Contar palabras válidas para la barra de progreso
-            total_words = 0
-            try:
-                with open(wordlist, 'r', errors='ignore') as wf:
-                    total_words = sum(1 for ln in wf if ln.strip() and not ln.startswith('#'))
-            except Exception:
-                pass
-
             # Archivo temporal para resultados JSON limpios (sin ruido de calibración)
             tmp_fd, tmp_path = tempfile.mkstemp(suffix='.json')
             os.close(tmp_fd)
@@ -438,51 +430,20 @@ def dir_bruteforce(target, session, wordlist=None, threads=THREADS, use_ffuf=Tru
                 "-t", str(threads), "-fc", "404,403", "-ac",
                 "-o", tmp_path, "-of", "json",
             ]
-            print_info(f"Ejecutando: {' '.join(ffuf_cmd[:7])} [salida JSON → {os.path.basename(tmp_path)}]")
+            print_info(f"Ejecutando: {' '.join(ffuf_cmd[:7])}")
+            print()  # línea en blanco antes de la barra nativa de ffuf
 
             results = []
             process = None
             try:
-                process = subprocess.Popen(
-                    ffuf_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    universal_newlines=True
-                )
-                progress_re = re.compile(r'Progress:\s*(\d+)/(\d+)')
-                last_n = 0
-
-                if HAS_TQDM and total_words > 0:
-                    pbar = tqdm(
-                        total=total_words, desc="ffuf", unit="req", ncols=80,
-                        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]"
-                    )
-                else:
-                    pbar = None
-
-                for line in process.stdout:
-                    m = progress_re.search(line)
-                    if m:
-                        current = int(m.group(1))
-                        total_p = int(m.group(2))
-                        if pbar:
-                            delta = current - last_n
-                            if delta > 0:
-                                pbar.update(delta)
-                                last_n = current
-                        else:
-                            pct = int(current / total_p * 100) if total_p else 0
-                            if pct % 10 == 0 and pct != getattr(dir_bruteforce, '_last_pct', -1):
-                                dir_bruteforce._last_pct = pct
-                                print_info(f"Progreso: {current}/{total_p} ({pct}%)")
-
-                if pbar:
-                    pbar.n = total_words
-                    pbar.refresh()
-                    pbar.close()
-
+                # Sin piping: ffuf escribe directamente al terminal → su barra de
+                # progreso funciona correctamente (necesita TTY para actualizarse).
+                process = subprocess.Popen(ffuf_cmd)
                 process.wait()
                 rc = process.returncode
+                print()  # línea en blanco tras la barra de ffuf
 
-                # ── Leer resultados limpios desde el JSON ──────────────────────
+                # ── Leer resultados limpios desde el JSON ─────────────────────
                 if os.path.isfile(tmp_path) and os.path.getsize(tmp_path) > 2:
                     try:
                         with open(tmp_path, 'r', encoding='utf-8') as f:
@@ -505,14 +466,14 @@ def dir_bruteforce(target, session, wordlist=None, threads=THREADS, use_ffuf=Tru
                             print(f"  {Fore.YELLOW}Sin resultados (todos filtrados por auto-calibración){Style.RESET_ALL}")
                         else:
                             for hit in sorted(hits, key=lambda x: x.get('status', 0)):
-                                path      = hit.get('input', {}).get('FUZZ', '') or hit.get('url', '')
-                                status    = hit.get('status', 0)
-                                size      = hit.get('length', 0)
-                                words_h   = hit.get('words', 0)
-                                dur_ns    = hit.get('duration', 0)
-                                dur_ms    = dur_ns // 1_000_000 if dur_ns else 0
-                                url_hit   = hit.get('url', urljoin(target, path))
-                                color     = STATUS_COLOR.get(status, Fore.WHITE)
+                                path    = hit.get('input', {}).get('FUZZ', '') or hit.get('url', '')
+                                status  = hit.get('status', 0)
+                                size    = hit.get('length', 0)
+                                words_h = hit.get('words', 0)
+                                dur_ns  = hit.get('duration', 0)
+                                dur_ms  = dur_ns // 1_000_000 if dur_ns else 0
+                                url_hit = hit.get('url', urljoin(target, path))
+                                color   = STATUS_COLOR.get(status, Fore.WHITE)
                                 print(
                                     f"  {color}[{status}]{Style.RESET_ALL}  "
                                     f"{Fore.WHITE}{path:<30}{Style.RESET_ALL}  "
