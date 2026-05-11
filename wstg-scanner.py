@@ -22,6 +22,7 @@ import os
 import subprocess
 import shutil
 import platform
+import html
 from urllib.parse import urljoin, urlparse, parse_qs, urlunparse
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -86,6 +87,18 @@ TARGET_URL = ""
 REQUEST_DELAY = 0.0  # Delay entre requests (segundos)
 OUTPUT_FILE = None   # Ruta del archivo de reporte
 FINDINGS = []        # Hallazgos acumulados para el reporte
+SCAN_DATA = {
+    "general": {},
+    "robots_paths": [],
+    "http_methods": [],
+    "directory_hits": [],
+    "api_endpoints": [],
+    "users": [],
+    "emails": [],
+    "bruteforce_credentials": [],
+    "spider": {},
+    "stats": {},
+}
 
 COMMON_DIRS = [
     "admin", "backup", "cgi-bin", "css", "js", "images", "uploads", "download",
@@ -358,31 +371,309 @@ def print_vuln(msg):
     FINDINGS.append(f"[VULN] {msg}")
     print(f"{Fore.MAGENTA}[VULN]{Style.RESET_ALL} {msg}")
 
+def _safe_filename_from_url(target_url):
+    """Genera un nombre de archivo estable en base a la URL objetivo."""
+    parsed = urlparse(target_url or "")
+    host = (parsed.netloc or parsed.path or "target").strip().lower()
+    path = parsed.path.strip('/') if parsed.netloc else ""
+    raw = f"{host}_{path}" if path else host
+    safe = re.sub(r'[^a-zA-Z0-9._-]+', '_', raw).strip('._-')
+    return safe or "target"
+
+def _default_report_txt_name(target_url):
+    return f"{_safe_filename_from_url(target_url)}.txt"
+
+def _normalize_output_paths(output_file, target_url):
+    """Devuelve rutas estables para TXT/JSON/HTML. Siempre sobrescribe por objetivo."""
+    base_name = _default_report_txt_name(target_url)
+    if output_file:
+        out_dir = output_file if os.path.isdir(output_file) else os.path.dirname(output_file)
+        txt_file = os.path.join(out_dir, base_name) if out_dir else base_name
+    else:
+        txt_file = base_name
+    base, ext = os.path.splitext(txt_file)
+    if not ext:
+        txt_file = txt_file + ".txt"
+        base = txt_file[:-4]
+    return txt_file, base + ".json", base + ".html"
+
+def _to_serializable(value):
+    """Convierte objetos no serializables (cookies, sets, etc.) en tipos JSON simples."""
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, dict):
+        return {str(k): _to_serializable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_to_serializable(v) for v in value]
+    if hasattr(value, 'items'):
+        try:
+            return {str(k): _to_serializable(v) for k, v in value.items()}
+        except Exception:
+            pass
+    return str(value)
+
+def _html_escape(value):
+    return html.escape(str(value), quote=True)
+
+def _build_html_report(report_data):
+    """Genera reporte HTML con modo light/dark y secciones relevantes del escaneo."""
+    scan_data = report_data.get("scan_data", {})
+    findings = report_data.get("findings", [])
+    technologies = scan_data.get("general", {}).get("technologies", [])
+    users = scan_data.get("users", [])
+    emails = scan_data.get("emails", [])
+    endpoints = scan_data.get("api_endpoints", [])
+    dirs = scan_data.get("directory_hits", [])
+    creds = scan_data.get("bruteforce_credentials", [])
+    spider = scan_data.get("spider", {})
+    meta = scan_data.get("stats", {})
+
+    findings_items = "\n".join(
+        f"<li>{_html_escape(item)}</li>" for item in findings
+    ) or "<li>Sin hallazgos.</li>"
+    technologies_html = " ".join(
+        f"<span class='tag'>{_html_escape(t)}</span>" for t in technologies
+    ) or "<span class='muted'>No detectadas</span>"
+    users_html = " ".join(
+        f"<span class='tag'>{_html_escape(u)}</span>" for u in users
+    ) or "<span class='muted'>Sin usuarios</span>"
+    emails_html = " ".join(
+        f"<span class='tag'>{_html_escape(e)}</span>" for e in emails
+    ) or "<span class='muted'>Sin emails</span>"
+
+    endpoint_rows = "\n".join(
+        "<tr>"
+        f"<td>{_html_escape(ep.get('status', ''))}</td>"
+        f"<td>{_html_escape(ep.get('endpoint', ''))}</td>"
+        f"<td>{_html_escape(ep.get('url', ''))}</td>"
+        f"<td>{_html_escape(ep.get('content_type', ''))}</td>"
+        "</tr>"
+        for ep in endpoints[:300]
+    ) or "<tr><td colspan='4'>Sin endpoints detectados.</td></tr>"
+
+    dir_rows = "\n".join(
+        "<tr>"
+        f"<td>{_html_escape(hit.get('status', ''))}</td>"
+        f"<td>{_html_escape(hit.get('url', ''))}</td>"
+        f"<td>{_html_escape(hit.get('size', ''))}</td>"
+        "</tr>"
+        for hit in dirs[:500]
+    ) or "<tr><td colspan='3'>Sin directorios encontrados.</td></tr>"
+
+    creds_rows = "\n".join(
+        "<tr>"
+        f"<td>{_html_escape(c.get('username', ''))}</td>"
+        f"<td>{_html_escape(c.get('password', ''))}</td>"
+        "</tr>"
+        for c in creds
+    ) or "<tr><td colspan='2'>Sin credenciales válidas detectadas.</td></tr>"
+
+    sample_urls_html = "\n".join(
+        f"<li>{_html_escape(u)}</li>" for u in spider.get("sample_urls", [])[:120]
+    ) or "<li>Sin URLs capturadas.</li>"
+
+    return f"""<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WSTG Report - {_html_escape(report_data.get('target', ''))}</title>
+  <style>
+    :root {{
+      --bg:#f5f7fb; --panel:#ffffff; --text:#0b1320; --muted:#5c687a; --border:#d8deea;
+      --accent:#0b7fab; --tag:#e9f5fb; --code:#eef1f7;
+    }}
+    [data-theme="dark"] {{
+      --bg:#0e1622; --panel:#141f2f; --text:#dce7ff; --muted:#9fb0ce; --border:#26344c;
+      --accent:#5bc0eb; --tag:#1d3147; --code:#1a283b;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin:0; font-family:"Segoe UI","Noto Sans",sans-serif; background:var(--bg); color:var(--text); }}
+    .wrap {{ max-width: 1180px; margin: 24px auto; padding: 0 14px 40px; }}
+    .card {{ background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:14px; margin-bottom:12px; overflow:auto; }}
+    .top {{ display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }}
+    .btn {{ border:1px solid var(--border); background:var(--panel); color:var(--text); border-radius:10px; padding:8px 10px; cursor:pointer; }}
+    .kpi {{ display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:10px; }}
+    .kpi div {{ background:var(--code); border:1px solid var(--border); border-radius:10px; padding:8px; }}
+    .kpi b {{ display:block; color:var(--accent); font-size:1.25rem; }}
+    .tag {{ display:inline-block; margin:4px 6px 0 0; background:var(--tag); padding:4px 8px; border-radius:999px; font-size:.85rem; }}
+    .muted {{ color:var(--muted); }}
+    table {{ width:100%; border-collapse:collapse; }}
+    th, td {{ text-align:left; border-bottom:1px solid var(--border); padding:8px 6px; vertical-align:top; }}
+    th {{ color:var(--accent); }}
+    pre {{ background:var(--code); border:1px solid var(--border); border-radius:10px; padding:10px; overflow:auto; }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card top">
+      <div>
+        <h2>WSTG Scanner v{_html_escape(report_data.get('tool', ''))}</h2>
+        <div class="muted">Objetivo: {_html_escape(report_data.get('target', ''))} | Fecha: {_html_escape(report_data.get('date', ''))}</div>
+      </div>
+      <button id="themeBtn" class="btn">Cambiar Light/Dark</button>
+    </div>
+
+    <div class="card">
+      <h3>Resumen</h3>
+      <div class="kpi">
+        <div><span class="muted">Hallazgos</span><b>{len(findings)}</b></div>
+        <div><span class="muted">Tecnologías</span><b>{len(technologies)}</b></div>
+        <div><span class="muted">API</span><b>{len(endpoints)}</b></div>
+        <div><span class="muted">Directorios</span><b>{len(dirs)}</b></div>
+        <div><span class="muted">Usuarios</span><b>{len(users)}</b></div>
+        <div><span class="muted">Credenciales</span><b>{len(creds)}</b></div>
+      </div>
+      <pre>{_html_escape(json.dumps(meta, indent=2, ensure_ascii=False))}</pre>
+    </div>
+
+    <div class="card">
+      <h3>Información general</h3>
+      <p><b>Servidor:</b> {_html_escape(scan_data.get('general', {}).get('server', 'N/A'))}</p>
+      <p><b>Status:</b> {_html_escape(scan_data.get('general', {}).get('status_code', 'N/A'))}</p>
+      <p><b>Tecnologías:</b><br>{technologies_html}</p>
+      <p><b>Usuarios:</b><br>{users_html}</p>
+      <p><b>Emails:</b><br>{emails_html}</p>
+    </div>
+
+    <div class="card"><h3>Hallazgos</h3><ul>{findings_items}</ul></div>
+
+    <div class="card">
+      <h3>Endpoints API detectados</h3>
+      <table><thead><tr><th>Status</th><th>Endpoint</th><th>URL</th><th>Content-Type</th></tr></thead><tbody>{endpoint_rows}</tbody></table>
+    </div>
+
+    <div class="card">
+      <h3>Directorios/archivos descubiertos</h3>
+      <table><thead><tr><th>Status</th><th>URL</th><th>Tamaño</th></tr></thead><tbody>{dir_rows}</tbody></table>
+    </div>
+
+    <div class="card">
+      <h3>Credenciales válidas (bruteforce)</h3>
+      <table><thead><tr><th>Usuario</th><th>Contraseña</th></tr></thead><tbody>{creds_rows}</tbody></table>
+    </div>
+
+    <div class="card">
+      <h3>Spidering (muestra de URLs)</h3>
+      <ul>{sample_urls_html}</ul>
+    </div>
+  </div>
+
+  <script>
+    (function() {{
+      var root = document.documentElement;
+      var key = 'wstg_theme';
+      var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      var initial = localStorage.getItem(key) || (prefersDark ? 'dark' : 'light');
+      root.setAttribute('data-theme', initial);
+      document.getElementById('themeBtn').addEventListener('click', function() {{
+        var curr = root.getAttribute('data-theme') || 'light';
+        var next = curr === 'dark' ? 'light' : 'dark';
+        root.setAttribute('data-theme', next);
+        localStorage.setItem(key, next);
+      }});
+    }})();
+  </script>
+</body>
+</html>
+"""
+
 def save_report(output_file=None):
-    """Guarda hallazgos en TXT y JSON."""
-    if not FINDINGS:
-        print_info("No se registraron vulnerabilidades en esta sesión.")
-        return
-    if not output_file:
-        output_file = f"wstg_report_{int(time.time())}.txt"
+    """Guarda hallazgos y datos relevantes en TXT, JSON y HTML."""
+    txt_file, json_file, html_file = _normalize_output_paths(output_file, TARGET_URL)
+    scan_stats = {
+        "authenticated": AUTHENTICATED,
+        "threads": THREADS,
+        "timeout": DEFAULT_TIMEOUT,
+        "delay": REQUEST_DELAY,
+        "total_findings": len(FINDINGS),
+        "total_api_endpoints": len(SCAN_DATA.get("api_endpoints", [])),
+        "total_dir_hits": len(SCAN_DATA.get("directory_hits", [])),
+        "total_users": len(SCAN_DATA.get("users", [])),
+        "total_emails": len(SCAN_DATA.get("emails", [])),
+        "total_bruteforce_credentials": len(SCAN_DATA.get("bruteforce_credentials", [])),
+        "total_spider_urls": SCAN_DATA.get("spider", {}).get("total_urls", 0),
+    }
+    SCAN_DATA["stats"] = scan_stats
+
+    report_data = {
+        "tool": VERSION,
+        "target": TARGET_URL,
+        "date": time.strftime('%Y-%m-%d %H:%M:%S'),
+        "findings": list(FINDINGS),
+        "scan_data": _to_serializable(SCAN_DATA),
+    }
+
     try:
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write(f"WSTG Scanner v{VERSION} - Reporte de Vulnerabilidades\n")
+        with open(txt_file, 'w', encoding='utf-8') as f:
+            f.write(f"WSTG Scanner v{VERSION} - Reporte de Escaneo\n")
             f.write(f"Objetivo : {TARGET_URL}\n")
             f.write(f"Fecha    : {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"Modo auth: {'Sí' if AUTHENTICATED else 'No'}\n")
             f.write("=" * 60 + "\n\n")
-            for finding in FINDINGS:
-                f.write(finding + "\n")
-        json_file = output_file.rsplit('.', 1)[0] + '.json'
+
+            f.write("[RESUMEN]\n")
+            for k, v in scan_stats.items():
+                f.write(f"- {k}: {v}\n")
+            f.write("\n")
+
+            general = report_data["scan_data"].get("general", {})
+            f.write("[INFORMACIÓN GENERAL]\n")
+            f.write(f"- Status: {general.get('status_code', 'N/A')}\n")
+            f.write(f"- Servidor: {general.get('server', 'N/A')}\n")
+            f.write(f"- Tecnologías: {', '.join(general.get('technologies', [])) or 'N/A'}\n")
+            f.write(f"- Métodos HTTP: {', '.join(report_data['scan_data'].get('http_methods', [])) or 'N/A'}\n")
+            f.write(f"- robots/sitemap: {', '.join(report_data['scan_data'].get('robots_paths', [])) or 'N/A'}\n\n")
+
+            f.write("[ENUMERACIÓN]\n")
+            f.write(f"- Usuarios: {', '.join(report_data['scan_data'].get('users', [])) or 'N/A'}\n")
+            f.write(f"- Emails: {', '.join(report_data['scan_data'].get('emails', [])) or 'N/A'}\n\n")
+
+            spider = report_data["scan_data"].get("spider", {})
+            f.write("[SPIDERING]\n")
+            f.write(f"- Total URLs: {spider.get('total_urls', 0)}\n")
+            f.write(f"- Total parámetros: {spider.get('total_params', 0)}\n")
+            f.write(f"- Total formularios: {spider.get('total_forms', 0)}\n")
+            for u in spider.get('sample_urls', []):
+                f.write(f"  * {u}\n")
+            f.write("\n")
+
+            f.write("[ENDPOINTS API]\n")
+            for ep in report_data['scan_data'].get('api_endpoints', []):
+                f.write(f"- [{ep.get('status')}] {ep.get('url')} ({ep.get('content_type', '')})\n")
+            f.write("\n")
+
+            f.write("[DIRECTORIOS ENCONTRADOS]\n")
+            for hit in report_data['scan_data'].get('directory_hits', []):
+                f.write(f"- [{hit.get('status')}] {hit.get('url')} size={hit.get('size', 'N/A')}\n")
+            f.write("\n")
+
+            f.write("[CREDENCIALES BRUTEFORCE]\n")
+            creds = report_data['scan_data'].get('bruteforce_credentials', [])
+            if creds:
+                for cred in creds:
+                    f.write(f"- {cred.get('username')}:{cred.get('password')}\n")
+            else:
+                f.write("- Ninguna\n")
+            f.write("\n")
+
+            f.write("[HALLAZGOS]\n")
+            if FINDINGS:
+                for finding in FINDINGS:
+                    f.write(finding + "\n")
+            else:
+                f.write("Sin hallazgos registrados.\n")
+
         with open(json_file, 'w', encoding='utf-8') as f:
-            json.dump({
-                "tool": f"WSTG Scanner v{VERSION}",
-                "target": TARGET_URL,
-                "date": time.strftime('%Y-%m-%d %H:%M:%S'),
-                "total_findings": len(FINDINGS),
-                "findings": FINDINGS
-            }, f, indent=2, ensure_ascii=False)
-        print_good(f"Reporte guardado: {output_file} y {json_file} ({len(FINDINGS)} hallazgos)")
+            json.dump(report_data, f, indent=2, ensure_ascii=False)
+
+        html_content = _build_html_report(report_data)
+        with open(html_file, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+
+        print_good(
+            f"Reportes guardados (sobrescritos si existían): {txt_file}, {json_file}, {html_file}"
+        )
     except Exception as e:
         print_error(f"No se pudo guardar el reporte: {e}")
 
@@ -1340,6 +1631,14 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
     Muestra progreso y resultado final sin duplicados.
     """
     try:
+        result_data = {
+            "credentials": [],
+            "login_forms": [],
+            "total_combinations": 0,
+            "total_passwords": 0,
+            "total_users": 0,
+        }
+
         if not usernames:
             usernames = ['admin', 'test']
         
@@ -1395,10 +1694,10 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
                     print_good("Formulario manual agregado.")
                 else:
                     print_error("Datos incompletos. No se realizará bruteforce.")
-                    return
+                    return result_data
             else:
                 print_info("Continuando sin bruteforce.")
-                return
+                return result_data
         
         # Cargar lista de contraseñas
         passwords = DEFAULT_PASSWORDS
@@ -1417,6 +1716,17 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
                 print_warning("No se encontró la wordlist de SecLists, usando lista pequeña por defecto.")
         
         total_combinations = len(usernames) * len(passwords)
+        result_data["total_combinations"] = total_combinations
+        result_data["total_passwords"] = len(passwords)
+        result_data["total_users"] = len(usernames)
+        result_data["login_forms"] = [
+            {
+                "url": f.get("url", ""),
+                "user_field": f.get("user_field", ""),
+                "pass_field": f.get("pass_field", ""),
+            }
+            for f in login_forms
+        ]
         print_info(f"Iniciando bruteforce con {len(usernames)} usuarios y {len(passwords)} contraseñas (total {total_combinations} combinaciones)...")
         
         found_credentials = set()  # Usar set para evitar duplicados
@@ -1570,10 +1880,22 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
             print_good(f"Bruteforce completado. Credenciales encontradas: {len(found_credentials)}")
             for user, pwd in found_credentials:
                 print_vuln(f"  {user}:{pwd}")
+            result_data["credentials"] = [
+                {"username": user, "password": pwd}
+                for user, pwd in sorted(found_credentials)
+            ]
         else:
             print_info("Bruteforce completado. No se encontraron credenciales válidas.")
+        return result_data
     except Exception as e:
         print_error(f"Error en bruteforce: {e}")
+        return {
+            "credentials": [],
+            "login_forms": [],
+            "total_combinations": 0,
+            "total_passwords": 0,
+            "total_users": 0,
+        }
 
 def spider_website(target, session, max_pages=500, max_depth=3, use_robots=True):
     print_info(f"Iniciando spidering en {target} (máx páginas: {max_pages}, profundidad: {max_depth})")
@@ -1717,9 +2039,18 @@ def run_information_gathering(target, session):
     print_info("=== RECOLECTANDO INFORMACIÓN GENERAL ===")
     info = safe_execute(gather_info, target, session)
     if info:
+        SCAN_DATA["general"] = {
+            "status_code": info.get("status_code"),
+            "server": info.get("server"),
+            "technologies": info.get("technologies", []),
+            "headers": info.get("headers", {}),
+            "cookies": [c.name for c in info.get("cookies", [])],
+        }
         print_info(f"Servidor: {info['server']}")
-        safe_execute(check_robots_sitemap, target, session)
-        safe_execute(check_http_methods, target, session)
+        robots_paths = safe_execute(check_robots_sitemap, target, session) or []
+        http_methods = safe_execute(check_http_methods, target, session) or []
+        SCAN_DATA["robots_paths"] = robots_paths
+        SCAN_DATA["http_methods"] = list(set(http_methods))
         safe_execute(check_security_headers, info['headers'])
         safe_execute(check_cookie_security, info['cookies'])
         resp = safe_execute(session.get, target, timeout=DEFAULT_TIMEOUT)
@@ -1744,7 +2075,8 @@ def run_directory_fuzzing(target, session):
     else:
         use_ffuf = False
         print_warning("ffuf no está instalado. Usando método interno.")
-    dir_bruteforce(target, session, wordlist=wordlist, threads=THREADS, use_ffuf=use_ffuf)
+    hits = dir_bruteforce(target, session, wordlist=wordlist, threads=THREADS, use_ffuf=use_ffuf) or []
+    SCAN_DATA["directory_hits"] = hits
 
 def run_injection_tests(target, session):
     print_info("=== PRUEBAS DE INYECCIÓN AVANZADAS ===")
@@ -1779,6 +2111,7 @@ def run_api_tests(target, session):
     print_info("=== PRUEBAS DE API (OWASP API Top 10) ===")
     print_info("[1/7] Descubrimiento de endpoints...")
     found = safe_execute(discover_api_endpoints, target, session) or []
+    SCAN_DATA["api_endpoints"] = found
     print_info("[2/7] CORS avanzado...")
     safe_execute(test_cors_advanced, target, session)
     print_info("[3/7] GraphQL introspección...")
@@ -1801,6 +2134,8 @@ def run_api_tests(target, session):
 def run_user_enum_bruteforce(target, session):
     print_info("=== ENUMERACIÓN DE USUARIOS Y BRUTEFORCE ===")
     users, emails = safe_execute(enumerate_users_from_endpoints, target, session)
+    SCAN_DATA["users"] = sorted(set(users or []))
+    SCAN_DATA["emails"] = sorted(set(emails or []))
     if users:
         print_good(f"Usuarios encontrados: {', '.join(users)}")
     if emails:
@@ -1815,7 +2150,9 @@ def run_user_enum_bruteforce(target, session):
                 users = [u.strip() for u in users_input.split(',') if u.strip()]
             else:
                 users = ['admin', 'test']
-        safe_execute(bruteforce_login, target, session, users, passlist if passlist else None)
+        brute_data = safe_execute(bruteforce_login, target, session, users, passlist if passlist else None)
+        if brute_data:
+            SCAN_DATA["bruteforce_credentials"] = brute_data.get("credentials", [])
 
 def run_spider(target, session):
     print_info("=== SPIDERING / MAPEO COMPLETO DEL SITIO ===")
@@ -1831,6 +2168,14 @@ def run_spider(target, session):
         max_depth = int(max_depth)
     use_robots = input("¿Respetar robots.txt? [S/n]: ").strip().lower() != 'n'
     urls, params, forms = spider_website(target, session, max_pages=max_pages, max_depth=max_depth, use_robots=use_robots)
+    SCAN_DATA["spider"] = {
+        "total_urls": len(urls),
+        "total_params": len(params),
+        "total_forms": len(forms),
+        "sample_urls": sorted(list(urls))[:120],
+        "sample_params": sorted(list(params))[:80],
+        "sample_forms": forms[:80],
+    }
     print_good(f"Total URLs descubiertas: {len(urls)}")
     if params:
         print_info(f"Parámetros únicos encontrados: {len(params)}")
@@ -1909,12 +2254,22 @@ def main():
     def _exit_gracefully():
         """Cierra el programa mostrando el reporte y el mensaje final."""
         print()
-        if FINDINGS:
+        has_scan_data = any([
+            bool(FINDINGS),
+            bool(SCAN_DATA.get("general")),
+            bool(SCAN_DATA.get("api_endpoints")),
+            bool(SCAN_DATA.get("directory_hits")),
+            bool(SCAN_DATA.get("users")),
+            bool(SCAN_DATA.get("emails")),
+            bool(SCAN_DATA.get("bruteforce_credentials")),
+            bool(SCAN_DATA.get("spider")),
+        ])
+        if has_scan_data:
             auto_save = OUTPUT_FILE is not None
             if not auto_save:
                 try:
                     auto_save = input(
-                        f"\n¿Guardar reporte con {len(FINDINGS)} hallazgos? [S/n]: "
+                        f"\n¿Guardar reporte del escaneo ({len(FINDINGS)} hallazgos)? [S/n]: "
                     ).strip().lower() != 'n'
                 except (KeyboardInterrupt, EOFError):
                     auto_save = False
