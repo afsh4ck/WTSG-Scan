@@ -1268,11 +1268,45 @@ def dir_bruteforce(target, session, wordlist=None, threads=THREADS, use_ffuf=Tru
             tmp_fd, tmp_path = tempfile.mkstemp(suffix='.json')
             os.close(tmp_fd)
 
+            # Pre-filtrar wordlist: descartar comentarios (#), líneas vacías y
+            # entradas con espacios/caracteres no válidos para rutas web.
+            clean_fd, clean_wl = tempfile.mkstemp(suffix='.txt', prefix='wstg_wl_')
+            os.close(clean_fd)
+            kept = 0
+            try:
+                with open(wordlist, 'r', encoding='utf-8', errors='ignore') as src, \
+                     open(clean_wl, 'w', encoding='utf-8') as dst:
+                    for line in src:
+                        entry = line.strip()
+                        if not entry or entry.startswith('#'):
+                            continue
+                        # Una ruta web no debe contener espacios en blanco internos
+                        if any(ch.isspace() for ch in entry):
+                            continue
+                        dst.write(entry + '\n')
+                        kept += 1
+                print_info(f"Wordlist limpia: {kept} entradas válidas (descartados comentarios y líneas inválidas)")
+            except Exception as e:
+                print_warning(f"No se pudo limpiar la wordlist ({e}); se usará la original.")
+                clean_wl = wordlist
+
+            # Calcular tamaño baseline de la raíz para descartar páginas-comodín
+            baseline_size = None
+            try:
+                base_resp = session.get(target, timeout=DEFAULT_TIMEOUT)
+                if base_resp.status_code == 200:
+                    baseline_size = len(base_resp.content)
+            except Exception:
+                pass
+
             ffuf_cmd = [
-                "ffuf", "-u", f"{target}/FUZZ", "-w", wordlist,
+                "ffuf", "-u", f"{target}/FUZZ", "-w", clean_wl,
                 "-t", str(threads), "-fc", "404,403", "-ac",
                 "-o", tmp_path, "-of", "json",
             ]
+            if baseline_size:
+                # Filtrar respuestas con el mismo tamaño exacto que la página raíz
+                ffuf_cmd += ["-fs", str(baseline_size)]
             print_info(f"Ejecutando: {' '.join(ffuf_cmd[:7])}")
             print()  # línea en blanco antes de la barra nativa de ffuf
 
@@ -1349,6 +1383,12 @@ def dir_bruteforce(target, session, wordlist=None, threads=THREADS, use_ffuf=Tru
                     os.unlink(tmp_path)
                 except Exception:
                     pass
+                # Eliminar wordlist limpia temporal (sólo si fue creada)
+                if clean_wl and clean_wl != wordlist:
+                    try:
+                        os.unlink(clean_wl)
+                    except Exception:
+                        pass
 
             return results
         else:
