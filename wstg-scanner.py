@@ -28,13 +28,42 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.robotparser import RobotFileParser
 
-# Activa edición de línea (backspace, flechas, historial) en todos los input()
-# Solo disponible en Unix/Linux/macOS; en Windows no es necesario.
-try:
-    import readline
-    readline.set_history_length(100)
-except ImportError:
-    pass
+
+# ===== INPUT CON AUTOCOMPLETADO DE RUTAS (TAB) =====
+import sys
+if os.name == 'nt':
+    try:
+        from prompt_toolkit import prompt
+        from prompt_toolkit.completion import PathCompleter
+        def input_path(prompt_text):
+            return prompt(prompt_text, completer=PathCompleter(), complete_while_typing=True)
+    except ImportError:
+        def input_path(prompt_text):
+            return input(prompt_text)
+else:
+    try:
+        import readline
+        import glob
+        readline.set_history_length(100)
+        class FilePathCompleter:
+            def complete(self, text, state):
+                line = readline.get_line_buffer().split()
+                if not line:
+                    return [None][state]
+                else:
+                    matches = glob.glob(text+'*')
+                    try:
+                        return matches[state]
+                    except IndexError:
+                        return None
+        readline.set_completer_delims(' \t\n;')
+        readline.set_completer(FilePathCompleter().complete)
+        readline.parse_and_bind('tab: complete')
+        def input_path(prompt_text):
+            return input(prompt_text)
+    except ImportError:
+        def input_path(prompt_text):
+            return input(prompt_text)
 
 import requests
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
@@ -429,152 +458,188 @@ def _build_html_report(report_data):
     spider = scan_data.get("spider", {})
     meta = scan_data.get("stats", {})
 
-    findings_items = "\n".join(
-        f"<li>{_html_escape(item)}</li>" for item in findings
-    ) or "<li>Sin hallazgos.</li>"
-    technologies_html = " ".join(
-        f"<span class='tag'>{_html_escape(t)}</span>" for t in technologies
-    ) or "<span class='muted'>No detectadas</span>"
-    users_html = " ".join(
-        f"<span class='tag'>{_html_escape(u)}</span>" for u in users
-    ) or "<span class='muted'>Sin usuarios</span>"
-    emails_html = " ".join(
-        f"<span class='tag'>{_html_escape(e)}</span>" for e in emails
-    ) or "<span class='muted'>Sin emails</span>"
+        findings_items = "\n".join(
+                f"<li>{_html_escape(item)}</li>" for item in findings
+        ) or "<li>Sin hallazgos.</li>"
+        technologies_html = "<ul class='tech-list'>" + "\n".join(
+                f"<li><span class='tag'>{_html_escape(t)}</span></li>" for t in technologies
+        ) + "</ul>" if technologies else "<span class='muted'>No detectadas</span>"
+        users_html = "<ul class='user-list'>" + "\n".join(
+                f"<li><span class='tag'>{_html_escape(u)}</span></li>" for u in users
+        ) + "</ul>" if users else "<span class='muted'>Sin usuarios</span>"
+        emails_html = "<ul class='email-list'>" + "\n".join(
+                f"<li><span class='tag'>{_html_escape(e)}</span></li>" for e in emails
+        ) + "</ul>" if emails else "<span class='muted'>Sin emails</span>"
 
-    endpoint_rows = "\n".join(
-        "<tr>"
-        f"<td>{_html_escape(ep.get('status', ''))}</td>"
-        f"<td>{_html_escape(ep.get('endpoint', ''))}</td>"
-        f"<td>{_html_escape(ep.get('url', ''))}</td>"
-        f"<td>{_html_escape(ep.get('content_type', ''))}</td>"
-        "</tr>"
-        for ep in endpoints[:300]
-    ) or "<tr><td colspan='4'>Sin endpoints detectados.</td></tr>"
+        endpoint_rows = "\n".join(
+                "<tr>"
+                f"<td>{_html_escape(ep.get('status', ''))}</td>"
+                f"<td>{_html_escape(ep.get('endpoint', ''))}</td>"
+                f"<td>{_html_escape(ep.get('url', ''))}</td>"
+                f"<td>{_html_escape(ep.get('content_type', ''))}</td>"
+                "</tr>"
+                for ep in endpoints[:300]
+        ) or "<tr><td colspan='4'>Sin endpoints detectados.</td></tr>"
 
-    dir_rows = "\n".join(
-        "<tr>"
-        f"<td>{_html_escape(hit.get('status', ''))}</td>"
-        f"<td>{_html_escape(hit.get('url', ''))}</td>"
-        f"<td>{_html_escape(hit.get('size', ''))}</td>"
-        "</tr>"
-        for hit in dirs[:500]
-    ) or "<tr><td colspan='3'>Sin directorios encontrados.</td></tr>"
+        dir_rows = "\n".join(
+                "<tr>"
+                f"<td>{_html_escape(hit.get('status', ''))}</td>"
+                f"<td>{_html_escape(hit.get('url', ''))}</td>"
+                f"<td>{_html_escape(hit.get('size', ''))}</td>"
+                "</tr>"
+                for hit in dirs[:500]
+        ) or "<tr><td colspan='3'>Sin directorios encontrados.</td></tr>"
 
-    creds_rows = "\n".join(
-        "<tr>"
-        f"<td>{_html_escape(c.get('username', ''))}</td>"
-        f"<td>{_html_escape(c.get('password', ''))}</td>"
-        "</tr>"
-        for c in creds
-    ) or "<tr><td colspan='2'>Sin credenciales válidas detectadas.</td></tr>"
+        creds_rows = "\n".join(
+                "<tr>"
+                f"<td>{_html_escape(c.get('username', ''))}</td>"
+                f"<td>{_html_escape(c.get('password', ''))}</td>"
+                "</tr>"
+                for c in creds
+        ) or "<tr><td colspan='2'>Sin credenciales válidas detectadas.</td></tr>"
 
-    sample_urls_html = "\n".join(
-        f"<li>{_html_escape(u)}</li>" for u in spider.get("sample_urls", [])[:120]
-    ) or "<li>Sin URLs capturadas.</li>"
+        sample_urls_html = "\n".join(
+                f"<li>{_html_escape(u)}</li>" for u in spider.get("sample_urls", [])[:120]
+        ) or "<li>Sin URLs capturadas.</li>"
 
-    return f"""<!doctype html>
-<html lang="es">
+        # Navegación por secciones
+        nav_sections = [
+                ("Resumen", "resumen"),
+                ("Información general", "info"),
+                ("Hallazgos", "hallazgos"),
+                ("API", "api"),
+                ("Directorios", "directorios"),
+                ("Credenciales", "credenciales"),
+                ("Spidering", "spidering"),
+        ]
+        nav_html = "<nav class='nav-pills'>" + "\n".join(
+                f"<a href='#{sec_id}' class='pill'>{sec_name}</a>" for sec_name, sec_id in nav_sections
+        ) + "</nav>"
+
+        return f"""<!doctype html>
+<html lang=\"es\">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>WSTG Report - {_html_escape(report_data.get('target', ''))}</title>
-  <style>
-    :root {{
-      --bg:#f5f7fb; --panel:#ffffff; --text:#0b1320; --muted:#5c687a; --border:#d8deea;
-      --accent:#0b7fab; --tag:#e9f5fb; --code:#eef1f7;
-    }}
-    [data-theme="dark"] {{
-      --bg:#0e1622; --panel:#141f2f; --text:#dce7ff; --muted:#9fb0ce; --border:#26344c;
-      --accent:#5bc0eb; --tag:#1d3147; --code:#1a283b;
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{ margin:0; font-family:"Segoe UI","Noto Sans",sans-serif; background:var(--bg); color:var(--text); }}
-    .wrap {{ max-width: 1180px; margin: 24px auto; padding: 0 14px 40px; }}
-    .card {{ background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:14px; margin-bottom:12px; overflow:auto; }}
-    .top {{ display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }}
-    .btn {{ border:1px solid var(--border); background:var(--panel); color:var(--text); border-radius:10px; padding:8px 10px; cursor:pointer; }}
-    .kpi {{ display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:10px; }}
-    .kpi div {{ background:var(--code); border:1px solid var(--border); border-radius:10px; padding:8px; }}
-    .kpi b {{ display:block; color:var(--accent); font-size:1.25rem; }}
-    .tag {{ display:inline-block; margin:4px 6px 0 0; background:var(--tag); padding:4px 8px; border-radius:999px; font-size:.85rem; }}
-    .muted {{ color:var(--muted); }}
-    table {{ width:100%; border-collapse:collapse; }}
-    th, td {{ text-align:left; border-bottom:1px solid var(--border); padding:8px 6px; vertical-align:top; }}
-    th {{ color:var(--accent); }}
-    pre {{ background:var(--code); border:1px solid var(--border); border-radius:10px; padding:10px; overflow:auto; }}
-  </style>
+    <meta charset=\"utf-8\">
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+    <title>WSTG Report - {{_html_escape(report_data.get('target', ''))}}</title>
+    <style>
+        :root {{
+            --bg:#f5f7fb; --panel:#ffffff; --text:#0b1320; --muted:#5c687a; --border:#d8deea;
+            --accent:#0b7fab; --tag:#e9f5fb; --code:#eef1f7;
+        }}
+        [data-theme=\"dark\"] {{
+            --bg:#0e1622; --panel:#141f2f; --text:#dce7ff; --muted:#9fb0ce; --border:#26344c;
+            --accent:#5bc0eb; --tag:#1d3147; --code:#1a283b;
+        }}
+        * {{ box-sizing: border-box; }}
+        body {{ margin:0; font-family:\"Segoe UI\",\"Noto Sans\",sans-serif; background:var(--bg); color:var(--text); }}
+        .wrap {{ max-width: 1180px; margin: 24px auto; padding: 0 14px 40px; }}
+        .card {{ background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:14px; margin-bottom:12px; overflow:auto; }}
+        .top {{ display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }}
+        .btn {{ border:none; background:var(--panel); color:var(--text); border-radius:50%; padding:10px; cursor:pointer; font-size:1.5rem; box-shadow:0 2px 8px #0001; transition:background 0.2s; }}
+        .btn:hover {{ background:var(--tag); }}
+        .nav-pills {{ display:flex; flex-wrap:wrap; gap:8px; margin:18px 0 10px 0; }}
+        .pill {{ display:inline-block; padding:7px 18px; border-radius:999px; background:var(--tag); color:var(--accent); text-decoration:none; font-weight:500; border:1px solid var(--border); transition:background 0.2s, color 0.2s; }}
+        .pill:hover, .pill:focus {{ background:var(--accent); color:#fff; }}
+        .kpi {{ display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:10px; }}
+        .kpi div {{ background:var(--code); border:1px solid var(--border); border-radius:10px; padding:8px; }}
+        .kpi b {{ display:block; color:var(--accent); font-size:1.25rem; }}
+        .tag {{ display:inline-block; margin:4px 6px 0 0; background:var(--tag); padding:4px 8px; border-radius:999px; font-size:.85rem; }}
+        .muted {{ color:var(--muted); }}
+        table {{ width:100%; border-collapse:collapse; }}
+        th, td {{ text-align:left; border-bottom:1px solid var(--border); padding:8px 6px; vertical-align:top; }}
+        th {{ color:var(--accent); }}
+        pre {{ background:var(--code); border:1px solid var(--border); border-radius:10px; padding:10px; overflow:auto; }}
+        .tech-list, .user-list, .email-list {{ list-style:none; padding:0; margin:0; display:flex; flex-wrap:wrap; gap:0; }}
+        .tech-list li, .user-list li, .email-list li {{ margin:0 8px 4px 0; }}
+        .target-card {{ display:flex; align-items:center; gap:18px; }}
+        .target-icon {{ font-size:2.2rem; color:var(--accent); margin-right:8px; }}
+        .target-meta {{ font-size:1.1rem; color:var(--muted); }}
+    </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="card top">
-      <div>
-        <h2>WSTG Scanner v{_html_escape(report_data.get('tool', ''))}</h2>
-        <div class="muted">Objetivo: {_html_escape(report_data.get('target', ''))} | Fecha: {_html_escape(report_data.get('date', ''))}</div>
-      </div>
-      <button id="themeBtn" class="btn">Cambiar Light/Dark</button>
+    <div class=\"wrap\">
+        <div class=\"card top\">
+            <div class='target-card'>
+                <span class='target-icon'>🌐</span>
+                <div>
+                    <div style='font-size:1.35rem; font-weight:600; color:var(--accent);'>{_html_escape(report_data.get('target', ''))}</div>
+                    <div class='target-meta'>Fecha: {_html_escape(report_data.get('date', ''))}</div>
+                </div>
+            </div>
+            <button id=\"themeBtn\" class=\"btn\" title='Cambiar tema'><span id='themeIcon'>🌙</span></button>
+        </div>
+
+        {nav_html}
+
+        <div class=\"card\" id='resumen'>
+            <h3>Resumen</h3>
+            <div class=\"kpi\">
+                <div><span class=\"muted\">Hallazgos</span><b>{len(findings)}</b></div>
+                <div><span class=\"muted\">Tecnologías</span><b>{len(technologies)}</b></div>
+                <div><span class=\"muted\">API</span><b>{len(endpoints)}</b></div>
+                <div><span class=\"muted\">Directorios</span><b>{len(dirs)}</b></div>
+                <div><span class=\"muted\">Usuarios</span><b>{len(users)}</b></div>
+                <div><span class=\"muted\">Credenciales</span><b>{len(creds)}</b></div>
+            </div>
+            <pre>{{_html_escape(json.dumps(meta, indent=2, ensure_ascii=False))}}</pre>
+        </div>
+
+        <div class=\"card\" id='info'>
+            <h3>Información general</h3>
+            <p><b>Servidor:</b> {{_html_escape(scan_data.get('general', {}).get('server', 'N/A'))}}</p>
+            <p><b>Status:</b> {{_html_escape(scan_data.get('general', {}).get('status_code', 'N/A'))}}</p>
+            <p><b>Tecnologías:</b><br>{technologies_html}</p>
+            <p><b>Usuarios:</b><br>{users_html}</p>
+            <p><b>Emails:</b><br>{emails_html}</p>
+        </div>
+
+        <div class=\"card\" id='hallazgos'><h3>Hallazgos</h3><ul>{findings_items}</ul></div>
+
+        <div class=\"card\" id='api'>
+            <h3>Endpoints API detectados</h3>
+            <table><thead><tr><th>Status</th><th>Endpoint</th><th>URL</th><th>Content-Type</th></tr></thead><tbody>{endpoint_rows}</tbody></table>
+        </div>
+
+        <div class=\"card\" id='directorios'>
+            <h3>Directorios/archivos descubiertos</h3>
+            <table><thead><tr><th>Status</th><th>URL</th><th>Tamaño</th></tr></thead><tbody>{dir_rows}</tbody></table>
+        </div>
+
+        <div class=\"card\" id='credenciales'>
+            <h3>Credenciales válidas (bruteforce)</h3>
+            <table><thead><tr><th>Usuario</th><th>Contraseña</th></tr></thead><tbody>{creds_rows}</tbody></table>
+        </div>
+
+        <div class=\"card\" id='spidering'>
+            <h3>Spidering (muestra de URLs)</h3>
+            <ul>{sample_urls_html}</ul>
+        </div>
     </div>
 
-    <div class="card">
-      <h3>Resumen</h3>
-      <div class="kpi">
-        <div><span class="muted">Hallazgos</span><b>{len(findings)}</b></div>
-        <div><span class="muted">Tecnologías</span><b>{len(technologies)}</b></div>
-        <div><span class="muted">API</span><b>{len(endpoints)}</b></div>
-        <div><span class="muted">Directorios</span><b>{len(dirs)}</b></div>
-        <div><span class="muted">Usuarios</span><b>{len(users)}</b></div>
-        <div><span class="muted">Credenciales</span><b>{len(creds)}</b></div>
-      </div>
-      <pre>{_html_escape(json.dumps(meta, indent=2, ensure_ascii=False))}</pre>
-    </div>
-
-    <div class="card">
-      <h3>Información general</h3>
-      <p><b>Servidor:</b> {_html_escape(scan_data.get('general', {}).get('server', 'N/A'))}</p>
-      <p><b>Status:</b> {_html_escape(scan_data.get('general', {}).get('status_code', 'N/A'))}</p>
-      <p><b>Tecnologías:</b><br>{technologies_html}</p>
-      <p><b>Usuarios:</b><br>{users_html}</p>
-      <p><b>Emails:</b><br>{emails_html}</p>
-    </div>
-
-    <div class="card"><h3>Hallazgos</h3><ul>{findings_items}</ul></div>
-
-    <div class="card">
-      <h3>Endpoints API detectados</h3>
-      <table><thead><tr><th>Status</th><th>Endpoint</th><th>URL</th><th>Content-Type</th></tr></thead><tbody>{endpoint_rows}</tbody></table>
-    </div>
-
-    <div class="card">
-      <h3>Directorios/archivos descubiertos</h3>
-      <table><thead><tr><th>Status</th><th>URL</th><th>Tamaño</th></tr></thead><tbody>{dir_rows}</tbody></table>
-    </div>
-
-    <div class="card">
-      <h3>Credenciales válidas (bruteforce)</h3>
-      <table><thead><tr><th>Usuario</th><th>Contraseña</th></tr></thead><tbody>{creds_rows}</tbody></table>
-    </div>
-
-    <div class="card">
-      <h3>Spidering (muestra de URLs)</h3>
-      <ul>{sample_urls_html}</ul>
-    </div>
-  </div>
-
-  <script>
-    (function() {{
-      var root = document.documentElement;
-      var key = 'wstg_theme';
-      var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-      var initial = localStorage.getItem(key) || (prefersDark ? 'dark' : 'light');
-      root.setAttribute('data-theme', initial);
-      document.getElementById('themeBtn').addEventListener('click', function() {{
-        var curr = root.getAttribute('data-theme') || 'light';
-        var next = curr === 'dark' ? 'light' : 'dark';
-        root.setAttribute('data-theme', next);
-        localStorage.setItem(key, next);
-      }});
-    }})();
-  </script>
+    <script>
+        (function() {{
+            var root = document.documentElement;
+            var key = 'wstg_theme';
+            var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+            var initial = localStorage.getItem(key) || (prefersDark ? 'dark' : 'light');
+            root.setAttribute('data-theme', initial);
+            var themeBtn = document.getElementById('themeBtn');
+            var themeIcon = document.getElementById('themeIcon');
+            function updateIcon() {{
+                var curr = root.getAttribute('data-theme') || 'light';
+                themeIcon.textContent = curr === 'dark' ? '☀️' : '🌙';
+            }}
+            updateIcon();
+            themeBtn.addEventListener('click', function() {{
+                var curr = root.getAttribute('data-theme') || 'light';
+                var next = curr === 'dark' ? 'light' : 'dark';
+                root.setAttribute('data-theme', next);
+                localStorage.setItem(key, next);
+                updateIcon();
+            }});
+        }})();
+    </script>
 </body>
 </html>
 """
@@ -707,7 +772,7 @@ def check_seclists():
         return SECLISTS_MEDIUM
     else:
         print_warning("No se encontró SecLists en las rutas por defecto.")
-        response = input("¿Deseas instalar SecLists automáticamente? (requiere sudo) [s/N]: ").strip().lower()
+        response = input_path("¿Deseas instalar SecLists automáticamente? (requiere sudo) [s/N]: ").strip().lower()
         if response == 's':
             try:
                 print_info("Ejecutando: sudo apt update && sudo apt install seclists -y")
@@ -1708,8 +1773,22 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
         if not usernames:
             usernames = ['admin', 'test']
 
+        # Permitir al usuario elegir método y parámetros avanzados
+        print_info("\n=== Bruteforce avanzado ===")
+        use_hydra = False
+        hydra_path = shutil.which("hydra")
+        if hydra_path:
+            resp = input("¿Usar hydra para el bruteforce? [S/n]: ").strip().lower()
+            use_hydra = (resp != 'n')
+        else:
+            print_warning("hydra no está instalado o no está en PATH. Usando método interno.")
+
+        login_url = input("Introduce la URL real del login (dejar vacío para autodetección): ").strip()
+        error_msg = input("Introduce el mensaje de error exacto (vacío para heurística): ").strip()
+
+        # Si no se especifica, autodetectar como antes
         login_forms_map = {}
-        urls_to_check = [target] + [urljoin(target, path) for path in LOGIN_PATHS]
+        urls_to_check = [login_url] if login_url else [target] + [urljoin(target, path) for path in LOGIN_PATHS]
 
         def _is_login_like(path):
             p = (path or '').lower()
@@ -1731,7 +1810,7 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
             elif pf:
                 score += 1
             return score
-        
+
         for page_url in urls_to_check:
             try:
                 resp = session.get(page_url, timeout=DEFAULT_TIMEOUT)
@@ -1784,22 +1863,22 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
                 f"Formulario de login detectado en {f['url']} "
                 f"(usuario: {f['user_field']}, pass: {f['pass_field']}, score={f['score']})"
             )
-        
+
         if not login_forms:
             print_warning("No se detectaron formularios de login automáticamente.")
             manual = input("¿Deseas introducir los datos manualmente? (s/n): ").strip().lower()
             if manual == 's':
-                login_url = input("URL completa del formulario de login: ").strip()
+                login_url2 = input("URL completa del formulario de login: ").strip()
                 user_field = input("Nombre del campo de usuario: ").strip()
                 pass_field = input("Nombre del campo de contraseña: ").strip()
-                if login_url and user_field and pass_field:
+                if login_url2 and user_field and pass_field:
                     login_forms.append({
-                        'url': normalize_url(login_url),
+                        'url': normalize_url(login_url2),
                         'user_field': user_field,
                         'pass_field': pass_field,
                         'hidden_fields': {},
                         'score': 10,
-                        'source_page': normalize_url(login_url),
+                        'source_page': normalize_url(login_url2),
                     })
                     print_good("Formulario manual agregado.")
                 else:
@@ -1817,7 +1896,7 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
             f"Usando formulario principal: {primary_form['url']} "
             f"({primary_form['user_field']}/{primary_form['pass_field']})"
         )
-        
+
         # Cargar lista de contraseñas
         passwords = DEFAULT_PASSWORDS
         if passlist and os.path.isfile(passlist):
@@ -1833,7 +1912,7 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
                     passwords = [line.strip() for line in f if line.strip()]
             else:
                 print_warning("No se encontró la wordlist de SecLists, usando lista pequeña por defecto.")
-        
+
         total_combinations = len(usernames) * len(passwords)
         result_data["total_combinations"] = total_combinations
         result_data["total_passwords"] = len(passwords)
@@ -1843,11 +1922,62 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
             "user_field": primary_form.get("user_field", ""),
             "pass_field": primary_form.get("pass_field", ""),
         }]
-        print_info(f"Iniciando bruteforce con {len(usernames)} usuarios y {len(passwords)} contraseñas (total {total_combinations} combinaciones)...")
-        
-        found_credentials = set()  # Usar set para evitar duplicados
 
-        # ── Calibración basal de FALLO ────────────────────────────────────────
+        if use_hydra:
+            # Crear archivos temporales para usuarios y contraseñas
+            import tempfile
+            with tempfile.NamedTemporaryFile('w+', delete=False) as ufile:
+                for u in usernames:
+                    ufile.write(u + '\n')
+                ufile_path = ufile.name
+            with tempfile.NamedTemporaryFile('w+', delete=False) as pfile:
+                for p in passwords:
+                    pfile.write(p + '\n')
+                pfile_path = pfile.name
+
+            # Detectar tipo de formulario (POST)
+            login_url_hydra = primary_form['url']
+            user_field = primary_form['user_field']
+            pass_field = primary_form['pass_field']
+            # Construir string de datos POST
+            post_data = f"{user_field}=^USER^{pass_field}=^PASS^"
+            for k, v in primary_form.get('hidden_fields', {}).items():
+                post_data += f"&{k}={v}"
+            # Mensaje de error personalizado
+            fail_flag = error_msg if error_msg else "login failed"
+            hydra_cmd = [
+                "hydra", "-L", ufile_path, "-P", pfile_path,
+                login_url_hydra,
+                "http-post-form",
+                f"{urlparse(login_url_hydra).path}:{post_data}:{fail_flag}"
+            ]
+            print_info(f"Ejecutando hydra: {' '.join(hydra_cmd)}")
+            try:
+                process = subprocess.Popen(hydra_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                for line in process.stdout:
+                    print(line, end='')
+                    if "login:" in line or "[80][http-post-form]" in line or "[SUCCESS]" in line:
+                        # Parsear credenciales
+                        m = re.search(r'login: ([^ ]+) +password: ([^ ]+)', line)
+                        if m:
+                            user, pwd = m.group(1), m.group(2)
+                            result_data["credentials"].append({"username": user, "password": pwd})
+                process.wait()
+                print_info("Hydra finalizado.")
+            except Exception as e:
+                print_error(f"Error ejecutando hydra: {e}")
+            finally:
+                try:
+                    os.unlink(ufile_path)
+                    os.unlink(pfile_path)
+                except Exception:
+                    pass
+            return result_data
+
+        # --- Método interno clásico ---
+        print_info(f"Iniciando bruteforce con {len(usernames)} usuarios y {len(passwords)} contraseñas (total {total_combinations} combinaciones)...")
+        found_credentials = set()
+
         _IMPOSSIBLE_USER = "__wstg_x7z9q__"
         _IMPOSSIBLE_PASS = "__wstg_x7z9q__"
 
@@ -1897,7 +2027,6 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
         if fail_lengths:
             fail_min = min(fail_lengths)
             fail_max = max(fail_lengths)
-            # Margen prudente para páginas dinámicas de login
             margin = max(int((fail_max - fail_min) * 0.35), 250)
             fail_min = max(0, fail_min - margin)
             fail_max = fail_max + margin
@@ -1913,38 +2042,27 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
             body = resp_follow.text.lower()
             final_path = _normalize_path(resp_follow.url)
             final_len = len(resp_follow.content)
-
-            # Evidencia de fallo explícita
+            if error_msg and error_msg in body:
+                return False
             if any(k in body for k in FAILURE_KEYWORDS):
                 return False
-
-            # Si seguimos en login, lo tratamos como fallo.
             if _is_login_path(final_path):
+                if fail_max > 0 and (final_len < fail_min or final_len > fail_max):
+                    return True
                 return False
-
-            # Mismo comportamiento que baseline de fallo.
-            if baseline_status != -1 and resp_follow.status_code == baseline_status and final_path == baseline_path:
-                if fail_max > 0 and fail_min <= final_len <= fail_max:
-                    return False
-
+            if any(k in body for k in SUCCESS_KEYWORDS):
+                return True
+            if baseline_status != -1 and resp_follow.status_code != baseline_status and final_path != baseline_path:
+                return True
             location = resp_no_redirect.headers.get('Location', '')
             location_path = _normalize_path(urljoin(primary_form['url'], location)) if location else ''
-
-            # Señal fuerte: redirect a ruta que no es login.
             if resp_no_redirect.status_code in (301, 302, 303, 307, 308):
                 if location and not _is_login_path(location_path):
                     return True
-
-            # Señal fuerte: contexto autenticado claro + URL fuera de login.
-            has_success_kw = any(k in body for k in SUCCESS_KEYWORDS)
-            if has_success_kw and not _is_login_path(final_path):
+            if fail_max > 0 and (final_len < fail_min or final_len > fail_max):
                 return True
-
-            # Señal de apoyo conservadora: cambio de ruta fuera de login + tamaño fuera de baseline.
             if final_path != baseline_path and not _is_login_path(final_path):
-                if fail_max > 0 and (final_len < fail_min or final_len > fail_max):
-                    return True
-
+                return True
             return False
 
         def try_cred(user, pwd):
@@ -1958,21 +2076,19 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
                     timeout=DEFAULT_TIMEOUT,
                     allow_redirects=False
                 )
-
                 resp_follow = session.post(
                     primary_form['url'],
                     data=payload,
                     timeout=DEFAULT_TIMEOUT,
                     allow_redirects=True
                 )
-
                 if is_successful_login(resp_no_redirect, resp_follow):
                     found_credentials.add((user, pwd))
                     return True
             except Exception:
                 pass
             return False
-        
+
         if HAS_TQDM:
             with tqdm(total=total_combinations, desc="Bruteforce", unit="comb", ncols=80) as pbar:
                 with ThreadPoolExecutor(max_workers=max_threads) as executor:
@@ -1995,7 +2111,7 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
                     if completed % 100 == 0 or completed == total_combinations:
                         print_info(f"Progreso bruteforce: {completed}/{total_combinations} combinaciones probadas")
                     future.result()
-        
+
         if found_credentials:
             print_good(f"Bruteforce completado. Credenciales encontradas: {len(found_credentials)}")
             for user, pwd in found_credentials:
@@ -2185,7 +2301,7 @@ def run_directory_fuzzing(target, session):
     use_default = input("¿Usar wordlist por defecto (SecLists small)? [S/n]: ").strip().lower()
     wordlist = None
     if use_default == 'n':
-        custom_wl = input("Ruta a wordlist personalizada: ").strip()
+        custom_wl = input_path("Ruta a wordlist personalizada: ").strip()
         if custom_wl:
             wordlist = custom_wl
         else:
@@ -2277,7 +2393,7 @@ def run_user_enum_bruteforce(target, session):
     safe_execute(test_user_enumeration_form, target, session)
     want_brute = input("¿Desea realizar fuerza bruta de contraseñas? (s/n): ").strip().lower()
     if want_brute == 's':
-        passlist = input("Ruta a wordlist de contraseñas (dejar vacío para usar por defecto de SecLists): ").strip()
+        passlist = input_path("Ruta a wordlist de contraseñas (dejar vacío para usar por defecto de SecLists): ").strip()
         if not users:
             users_input = input("Introduce usuarios separados por comas: ").strip()
             if users_input:
