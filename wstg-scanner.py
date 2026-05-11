@@ -418,6 +418,7 @@ def install_nuclei():
 
 def run_nuclei_scan(target):
     """Ejecuta Nuclei sobre el objetivo y acumula resultados en SCAN_DATA."""
+    print_phase("ANÁLISIS DE VULNERABILIDADES")
     nuclei_path = check_nuclei()
     if not nuclei_path:
         if not install_nuclei():
@@ -626,6 +627,12 @@ def print_error(msg):
 def print_vuln(msg):
     FINDINGS.append(f"[VULN] {msg}")
     print(f"{Fore.MAGENTA}[VULN]{Style.RESET_ALL} {msg}")
+
+def print_phase(title):
+    """Imprime una cabecera de fase: [INFO] ======= TITLE ======= con espacio arriba y abajo."""
+    print()
+    print(f"{Fore.CYAN}[INFO]{Style.RESET_ALL} ======= {title} =======")
+    print()
 
 # Regex para descontar códigos ANSI al medir ancho visible
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
@@ -2887,7 +2894,7 @@ def show_menu():
     print("="*50)
 
 def run_information_gathering(target, session):
-    print_info("\n======= RECOLECTANDO INFORMACIÓN GENERAL =======\n")
+    print_phase("RECOLECTANDO INFORMACIÓN GENERAL")
     info = safe_execute(gather_info, target, session)
     if info:
         SCAN_DATA["general"] = {
@@ -2912,7 +2919,7 @@ def run_information_gathering(target, session):
         safe_execute(test_cors_advanced, target, session)
 
 def run_directory_fuzzing(target, session):
-    print_info("\n======= FUZZING DE DIRECTORIOS =======\n")
+    print_phase("FUZZING DE DIRECTORIOS")
     use_default = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Usar wordlist por defecto (raft-small-directories)? [S/n]: ").strip().lower()
     wordlist = None
     if use_default == 'n':
@@ -2930,7 +2937,7 @@ def run_directory_fuzzing(target, session):
     SCAN_DATA["directory_hits"] = hits
 
 def run_injection_tests(target, session):
-    print_info("\n======= PRUEBAS DE INYECCIÓN AVANZADAS =======\n")
+    print_phase("PRUEBAS DE INYECCIÓN AVANZADAS")
     try:
         forms, url_params = safe_execute(extract_forms_and_params, target, session)
         SCAN_DATA["injection"] = {
@@ -2989,7 +2996,7 @@ def run_injection_tests(target, session):
         return
 
 def run_api_tests(target, session):
-    print_info("\n======= PRUEBAS DE API (OWASP API Top 10) =======\n")
+    print_phase("PRUEBAS DE API (OWASP API Top 10)")
     print_info("[1/7] Descubrimiento de endpoints...")
     found = safe_execute(discover_api_endpoints, target, session) or []
     SCAN_DATA["api_endpoints"] = found
@@ -3013,7 +3020,7 @@ def run_api_tests(target, session):
     print_good("Pruebas de API completadas.")
 
 def run_user_enum_bruteforce(target, session):
-    print_info("\n======= ENUMERACIÓN DE USUARIOS Y BRUTEFORCE =======\n")
+    print_phase("ENUMERACIÓN DE USUARIOS Y BRUTEFORCE")
     users, emails = safe_execute(enumerate_users_from_endpoints, target, session)
     SCAN_DATA["users"] = sorted(set(users or []))
     SCAN_DATA["emails"] = sorted(set(emails or []))
@@ -3036,7 +3043,7 @@ def run_user_enum_bruteforce(target, session):
             SCAN_DATA["bruteforce_credentials"] = brute_data.get("credentials", [])
 
 def run_spider(target, session):
-    print_info("\n======= SPIDERING / MAPEO COMPLETO DEL SITIO =======\n")
+    print_phase("SPIDERING / MAPEO COMPLETO DEL SITIO")
     max_pages = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Máximo número de páginas a rastrear (default 500): ").strip()
     if not max_pages:
         max_pages = 500
@@ -3071,7 +3078,7 @@ def run_spider(target, session):
         print_good(f"URLs guardadas en {filename}")
 
 def run_full_pentest(target, session):
-    print_info("\n======= INICIANDO PENTESTING COMPLETO =======\n")
+    print_phase("INICIANDO PENTESTING COMPLETO")
     # Orden según menú principal:
     run_information_gathering(target, session)         # 2
     run_nuclei_scan(target)                            # 3
