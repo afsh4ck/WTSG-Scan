@@ -222,6 +222,43 @@ LOGIN_PATHS = [
     "/user/login", "/account/login", "/admin/login", "/wp-login.php"
 ]
 
+# Prefijos típicos de API que sirven de base para fuzzing recursivo
+API_BASE_PREFIXES = [
+    "/api", "/api/v1", "/api/v2", "/api/v3",
+    "/v1", "/v2", "/v3",
+    "/rest", "/rest/v1", "/rest/v2",
+    "/services", "/services/api",
+]
+
+# Recursos REST típicos. Se prueban bajo cada prefijo de API activo
+# (p. ej. /api/v1/users, /api/v1/transfer, etc.)
+API_RESOURCES = [
+    # Identidad / cuentas
+    "users", "user", "accounts", "account", "me", "profile", "whoami",
+    "auth", "login", "logout", "register", "signup", "signin",
+    "token", "tokens", "refresh", "session", "sessions",
+    "password", "reset-password", "forgot-password", "2fa", "mfa", "otp",
+    # Admin / configuración
+    "admin", "config", "settings", "flags", "feature-flags",
+    "permissions", "roles", "groups", "privileges",
+    "audit", "audit-log", "logs", "events",
+    # Datos / negocio
+    "data", "items", "products", "orders", "invoices", "payments",
+    "transactions", "transfer", "transfers", "wallets", "balance",
+    "subscriptions", "plans", "billing", "cart", "checkout",
+    "notes", "messages", "chats", "comments", "posts", "articles",
+    "files", "uploads", "documents", "attachments", "media", "images",
+    # Búsqueda / metadatos
+    "search", "filter", "query", "tags", "categories",
+    # Operacional / oculto
+    "stats", "metrics", "health", "status", "version", "info",
+    "debug", "test", "internal", "private", "hidden",
+    "keys", "secrets", "credentials", "api-keys",
+    "export", "import", "backup", "dump", "report", "reports",
+    "notifications", "webhooks", "callbacks", "subscribe",
+    "feed", "feeds", "activity", "history",
+]
+
 # ========== UTILIDADES ==========
 def clear_screen():
     if platform.system() == "Windows":
@@ -1908,45 +1945,99 @@ def test_cors_advanced(target, session):
 # ========== API PENTESTING (OWASP API Top 10) ==========
 
 def discover_api_endpoints(target, session):
-    """OWASP API9: Descubre endpoints expuestos y analiza documentación OpenAPI/Swagger."""
+    """OWASP API9: Descubre endpoints expuestos y analiza documentación OpenAPI/Swagger.
+    Realiza también fuzzing recursivo bajo prefijos /api/v1, /api/v2, /v1, etc."""
     found = []
+    seen_urls = set()
+
+    # Códigos que indican "el endpoint existe" (no 404)
+    INTERESTING = {200, 201, 202, 204, 301, 302, 307, 308, 401, 403, 405, 500}
+
+    def _probe(endpoint, depth_label=""):
+        """Prueba un endpoint con GET. Devuelve dict si es interesante, None si no."""
+        url = urljoin(target, endpoint)
+        if url in seen_urls:
+            return None
+        seen_urls.add(url)
+        try:
+            resp = session.get(url, timeout=DEFAULT_TIMEOUT, allow_redirects=False)
+        except Exception:
+            return None
+        st = resp.status_code
+        if st not in INTERESTING:
+            return None
+        ct = resp.headers.get('Content-Type', '').split(';')[0].strip()
+        item = {'url': url, 'endpoint': endpoint, 'status': st, 'content_type': ct}
+
+        prefix = f"  {depth_label}" if depth_label else ""
+        if st in (200, 201, 202, 204):
+            print_good(f"{prefix}[{st}] {url}  ({ct})")
+        elif st in (301, 302, 307, 308):
+            loc = resp.headers.get('Location', '')
+            print_info(f"{prefix}[{st}] {url} -> {loc}")
+        elif st == 401:
+            print_warning(f"{prefix}[401] {url}  (requiere autenticación)")
+        elif st == 403:
+            print_warning(f"{prefix}[403] {url}  (prohibido)")
+        elif st == 405:
+            allow = resp.headers.get('Allow', '')
+            print_warning(f"{prefix}[405] {url}  (método no permitido; Allow: {allow or 'N/A'})")
+        elif st == 500:
+            print_error(f"{prefix}[500] {url}  (error interno — posible parámetro no manejado)")
+
+        # Si es Swagger/OpenAPI/API docs, parsear y registrar rutas
+        if st == 200 and any(x in endpoint for x in ('swagger', 'openapi', 'api-docs')):
+            try:
+                doc = resp.json()
+                paths = list(doc.get('paths', {}).keys())
+                if paths:
+                    print_info(f"  Rutas documentadas ({len(paths)}): {', '.join(paths[:12])}")
+                    for path in paths:
+                        extra_url = urljoin(target, path)
+                        if extra_url not in seen_urls:
+                            seen_urls.add(extra_url)
+                            found.append({'url': extra_url, 'endpoint': path,
+                                          'status': 0, 'content_type': ''})
+            except Exception:
+                pass
+        return item
+
     try:
         print_info(f"Escaneando {len(API_ENDPOINTS)} rutas de API conocidas...")
         for ep in API_ENDPOINTS:
-            url = urljoin(target, ep)
+            item = _probe(ep)
+            if item:
+                found.append(item)
+
+        # Fuzzing recursivo: bajo cada prefijo activo, probar recursos típicos
+        active_prefixes = []
+        for prefix in API_BASE_PREFIXES:
+            url = urljoin(target, prefix)
             try:
-                resp = session.get(url, timeout=DEFAULT_TIMEOUT)
-                ct = resp.headers.get('Content-Type', '').split(';')[0].strip()
-                if resp.status_code == 200:
-                    print_good(f"[200] {url}  ({ct})")
-                    found.append({'url': url, 'endpoint': ep, 'status': 200, 'content_type': ct})
-                    # Extraer rutas desde Swagger/OpenAPI
-                    if any(x in ep for x in ('swagger', 'openapi', 'api-docs')):
-                        try:
-                            doc = resp.json()
-                            paths = list(doc.get('paths', {}).keys())
-                            if paths:
-                                print_info(f"  Rutas documentadas ({len(paths)}): {', '.join(paths[:12])}")
-                                for path in paths:
-                                    extra_url = urljoin(target, path)
-                                    found.append({'url': extra_url, 'endpoint': path,
-                                                  'status': 0, 'content_type': ''})
-                        except Exception:
-                            pass
-                elif resp.status_code == 401:
-                    print_warning(f"[401] {url}  (requiere autenticación)")
-                    found.append({'url': url, 'endpoint': ep, 'status': 401, 'content_type': ct})
-                elif resp.status_code == 403:
-                    print_warning(f"[403] {url}  (prohibido)")
-                    found.append({'url': url, 'endpoint': ep, 'status': 403, 'content_type': ct})
+                resp = session.get(url, timeout=DEFAULT_TIMEOUT, allow_redirects=False)
+                if resp.status_code in INTERESTING:
+                    active_prefixes.append(prefix)
             except Exception:
-                pass
+                continue
+
+        if active_prefixes:
+            print_info(
+                f"Prefijos de API activos detectados: {', '.join(active_prefixes)}. "
+                f"Fuzzeando {len(API_RESOURCES)} recursos comunes bajo cada uno..."
+            )
+            for prefix in active_prefixes:
+                for resource in API_RESOURCES:
+                    endpoint = f"{prefix.rstrip('/')}/{resource}"
+                    item = _probe(endpoint, depth_label="↳ ")
+                    if item:
+                        found.append(item)
+
         print_info(f"Total endpoints API encontrados/accesibles: {len(found)}")
         if found:
             STATUS_COLOR = {
-                200: Fore.GREEN, 201: Fore.GREEN,
-                301: Fore.CYAN, 302: Fore.CYAN,
-                401: Fore.YELLOW, 403: Fore.YELLOW,
+                200: Fore.GREEN, 201: Fore.GREEN, 202: Fore.GREEN, 204: Fore.GREEN,
+                301: Fore.CYAN, 302: Fore.CYAN, 307: Fore.CYAN, 308: Fore.CYAN,
+                401: Fore.YELLOW, 403: Fore.YELLOW, 405: Fore.YELLOW,
                 500: Fore.RED, 503: Fore.RED,
             }
             rows = []
