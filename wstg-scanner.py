@@ -92,6 +92,7 @@ SCAN_DATA = {
     "robots_paths": [],
     "http_methods": [],
     "directory_hits": [],
+    "injection": {},
     "api_endpoints": [],
     "users": [],
     "emails": [],
@@ -589,6 +590,10 @@ def save_report(output_file=None):
         "total_findings": len(FINDINGS),
         "total_api_endpoints": len(SCAN_DATA.get("api_endpoints", [])),
         "total_dir_hits": len(SCAN_DATA.get("directory_hits", [])),
+        "injection_forms_found": SCAN_DATA.get("injection", {}).get("forms_found", 0),
+        "injection_get_params_found": SCAN_DATA.get("injection", {}).get("url_params_found", 0),
+        "injection_get_params_tested": len(SCAN_DATA.get("injection", {}).get("tested_get_params", [])),
+        "injection_form_inputs_tested": len(SCAN_DATA.get("injection", {}).get("tested_form_inputs", [])),
         "total_users": len(SCAN_DATA.get("users", [])),
         "total_emails": len(SCAN_DATA.get("emails", [])),
         "total_bruteforce_credentials": len(SCAN_DATA.get("bruteforce_credentials", [])),
@@ -1022,38 +1027,99 @@ def dir_bruteforce(target, session, wordlist=None, threads=THREADS, use_ffuf=Tru
         return []
 
 def extract_forms_and_params(target, session):
+    def _extract_from_single_page(page_url):
+        forms = []
+        params = set()
+        try:
+            resp = session.get(page_url, timeout=DEFAULT_TIMEOUT)
+            if resp.status_code >= 400:
+                return forms, params
+            content_type = (resp.headers.get('Content-Type', '') or '').lower()
+            if 'html' not in content_type and '<form' not in resp.text.lower():
+                return forms, params
+
+            if HAS_BS4:
+                soup = BeautifulSoup(resp.text, 'html.parser')
+                for form in soup.find_all('form'):
+                    action = form.get('action')
+                    method = form.get('method', 'get').upper()
+                    inputs = []
+                    for inp in form.find_all(['input', 'textarea', 'select']):
+                        name = inp.get('name')
+                        if not name:
+                            continue
+                        input_type = (inp.get('type') or '').lower()
+                        if input_type in ('submit', 'button', 'image', 'reset', 'file'):
+                            continue
+                        inputs.append(name)
+                    if inputs:
+                        forms.append({
+                            'page_url': page_url,
+                            'action': action,
+                            'method': method,
+                            'inputs': sorted(set(inputs))
+                        })
+
+                for a in soup.find_all('a', href=True):
+                    href = a['href']
+                    parsed = urlparse(href)
+                    if parsed.query:
+                        for key in parse_qs(parsed.query).keys():
+                            params.add(key)
+            else:
+                form_regex = re.compile(r'<form.*?action=["\'](.*?)["\'].*?method=["\'](.*?)["\'].*?>', re.I)
+                for match in form_regex.finditer(resp.text):
+                    action = match.group(1)
+                    method = match.group(2).upper()
+                    forms.append({'page_url': page_url, 'action': action, 'method': method, 'inputs': []})
+                param_regex = re.compile(r'<a\s+href=["\'][^"\']*\?(.*?)(?:["\']|#)', re.I)
+                for match in param_regex.finditer(resp.text):
+                    query = match.group(1)
+                    for key in parse_qs(query).keys():
+                        params.add(key)
+
+            parsed_page = urlparse(page_url)
+            if parsed_page.query:
+                for key in parse_qs(parsed_page.query).keys():
+                    params.add(key)
+        except Exception:
+            pass
+        return forms, params
+
     try:
         forms = []
         params = set()
-        resp = session.get(target, timeout=DEFAULT_TIMEOUT)
-        if HAS_BS4:
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            for form in soup.find_all('form'):
-                action = form.get('action')
-                method = form.get('method', 'get').upper()
-                inputs = []
-                for inp in form.find_all(['input', 'textarea', 'select']):
-                    name = inp.get('name')
-                    if name:
-                        inputs.append(name)
-                forms.append({'action': action, 'method': method, 'inputs': inputs})
-            for a in soup.find_all('a', href=True):
-                href = a['href']
-                parsed = urlparse(href)
-                if parsed.query:
-                    for key in parse_qs(parsed.query).keys():
-                        params.add(key)
-        else:
-            form_regex = re.compile(r'<form.*?action=["\'](.*?)["\'].*?method=["\'](.*?)["\'].*?>', re.I)
-            for match in form_regex.finditer(resp.text):
-                action = match.group(1)
-                method = match.group(2).upper()
-                forms.append({'action': action, 'method': method, 'inputs': []})
-            param_regex = re.compile(r'<a\s+href=["\'][^"\']*\?(.*?)(?:["\']|#)', re.I)
-            for match in param_regex.finditer(resp.text):
-                query = match.group(1)
-                for key in parse_qs(query).keys():
-                    params.add(key)
+        form_keys = set()
+
+        print_info("Crawling para detectar formularios e inputs de forma exhaustiva...")
+        discovered_urls, spider_params, _ = spider_website(
+            target,
+            session,
+            max_pages=250,
+            max_depth=3,
+            use_robots=True,
+        )
+
+        params.update(spider_params or set())
+        for page_url in sorted(discovered_urls):
+            page_forms, page_params = _extract_from_single_page(page_url)
+            params.update(page_params)
+            for f in page_forms:
+                action_url = urljoin(f['page_url'], f.get('action') or f['page_url'])
+                key = (
+                    action_url,
+                    f.get('method', 'GET').upper(),
+                    tuple(sorted(set(f.get('inputs', []))))
+                )
+                if key in form_keys:
+                    continue
+                form_keys.add(key)
+                forms.append({
+                    'page_url': f['page_url'],
+                    'action': action_url,
+                    'method': f.get('method', 'GET').upper(),
+                    'inputs': sorted(set(f.get('inputs', [])))
+                })
         print_info(f"Formularios encontrados: {len(forms)}")
         print_info(f"Parámetros únicos en enlaces: {len(params)}")
         return forms, list(params)
@@ -1627,8 +1693,8 @@ def test_user_enumeration_form(target, session):
 
 def bruteforce_login(target, session, usernames, passlist, max_threads=5):
     """
-    Detecta formularios de login y realiza fuerza bruta.
-    Muestra progreso y resultado final sin duplicados.
+    Detecta formulario de login principal y realiza fuerza bruta con
+    validación estricta para minimizar falsos positivos.
     """
     try:
         result_data = {
@@ -1641,9 +1707,30 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
 
         if not usernames:
             usernames = ['admin', 'test']
-        
-        login_forms = []
+
+        login_forms_map = {}
         urls_to_check = [target] + [urljoin(target, path) for path in LOGIN_PATHS]
+
+        def _is_login_like(path):
+            p = (path or '').lower()
+            return any(k in p for k in ('login', 'signin', 'sign-in', 'auth', 'logon', 'wp-login', 'session'))
+
+        def _score_form(form_url, page_url, user_field, pass_field):
+            score = 0
+            full = f"{form_url} {page_url}".lower()
+            if _is_login_like(full):
+                score += 4
+            uf = (user_field or '').lower()
+            pf = (pass_field or '').lower()
+            if uf in ('username', 'user', 'email', 'login'):
+                score += 2
+            elif uf:
+                score += 1
+            if pf in ('password', 'pass', 'passwd'):
+                score += 2
+            elif pf:
+                score += 1
+            return score
         
         for page_url in urls_to_check:
             try:
@@ -1669,14 +1756,34 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
                                 pass_field = inp.get('name')
                         if user_field and pass_field:
                             form_url = urljoin(page_url, action) if action else page_url
-                            login_forms.append({
+                            hidden_fields = {}
+                            for inp in inputs:
+                                iname = inp.get('name')
+                                itype = (inp.get('type') or '').lower()
+                                if iname and itype == 'hidden':
+                                    hidden_fields[iname] = inp.get('value', '')
+                            score = _score_form(form_url, page_url, user_field, pass_field)
+                            form_data = {
                                 'url': form_url,
                                 'user_field': user_field,
-                                'pass_field': pass_field
-                            })
-                            print_good(f"Formulario de login detectado en {form_url} (usuario: {user_field}, pass: {pass_field})")
+                                'pass_field': pass_field,
+                                'hidden_fields': hidden_fields,
+                                'score': score,
+                                'source_page': page_url,
+                            }
+                            key = (form_url, user_field, pass_field)
+                            prev = login_forms_map.get(key)
+                            if prev is None or form_data['score'] > prev['score']:
+                                login_forms_map[key] = form_data
             except:
                 continue
+
+        login_forms = list(login_forms_map.values())
+        for f in login_forms:
+            print_good(
+                f"Formulario de login detectado en {f['url']} "
+                f"(usuario: {f['user_field']}, pass: {f['pass_field']}, score={f['score']})"
+            )
         
         if not login_forms:
             print_warning("No se detectaron formularios de login automáticamente.")
@@ -1689,7 +1796,10 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
                     login_forms.append({
                         'url': normalize_url(login_url),
                         'user_field': user_field,
-                        'pass_field': pass_field
+                        'pass_field': pass_field,
+                        'hidden_fields': {},
+                        'score': 10,
+                        'source_page': normalize_url(login_url),
                     })
                     print_good("Formulario manual agregado.")
                 else:
@@ -1698,6 +1808,15 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
             else:
                 print_info("Continuando sin bruteforce.")
                 return result_data
+
+        primary_form = max(
+            login_forms,
+            key=lambda f: (f.get('score', 0), -len(urlparse(f.get('url', '')).path or '/'))
+        )
+        print_info(
+            f"Usando formulario principal: {primary_form['url']} "
+            f"({primary_form['user_field']}/{primary_form['pass_field']})"
+        )
         
         # Cargar lista de contraseñas
         passwords = DEFAULT_PASSWORDS
@@ -1719,131 +1838,135 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
         result_data["total_combinations"] = total_combinations
         result_data["total_passwords"] = len(passwords)
         result_data["total_users"] = len(usernames)
-        result_data["login_forms"] = [
-            {
-                "url": f.get("url", ""),
-                "user_field": f.get("user_field", ""),
-                "pass_field": f.get("pass_field", ""),
-            }
-            for f in login_forms
-        ]
+        result_data["login_forms"] = [{
+            "url": primary_form.get("url", ""),
+            "user_field": primary_form.get("user_field", ""),
+            "pass_field": primary_form.get("pass_field", ""),
+        }]
         print_info(f"Iniciando bruteforce con {len(usernames)} usuarios y {len(passwords)} contraseñas (total {total_combinations} combinaciones)...")
         
         found_credentials = set()  # Usar set para evitar duplicados
 
-        # ── Calibración basal ─────────────────────────────────────────────────
-        # Enviamos 3 requests con credenciales imposibles para establecer el
-        # rango normal de la página de error (páginas dinámicas varían en size).
+        # ── Calibración basal de FALLO ────────────────────────────────────────
         _IMPOSSIBLE_USER = "__wstg_x7z9q__"
         _IMPOSSIBLE_PASS = "__wstg_x7z9q__"
 
-        import hashlib
-
-        # Palabras clave de sesión activa que NO deberían aparecer en login fallido
-        _SUCCESS_KEYWORDS = [
+        SUCCESS_KEYWORDS = [
             'logout', 'log out', 'sign out', 'cerrar sesión', 'cerrar sesion',
-            'salir', 'dashboard', 'panel', 'bienvenido', 'welcome', 'mi cuenta',
-            'my account', 'profile', 'perfil',
+            'dashboard', 'panel', 'welcome', 'bienvenido', 'my account', 'mi cuenta',
+            'profile', 'perfil'
         ]
-        # Palabras de error que SÍ aparecen en fallos y NO deben aparecer en éxito
-        _FAILURE_KEYWORDS = [
-            'invalid', 'incorrect', 'wrong', 'failed', 'error', 'inválido',
-            'incorrecto', 'contraseña incorrecta', 'usuario no encontrado',
-            'bad credentials', 'authentication failed', 'login failed',
+        FAILURE_KEYWORDS = [
+            'invalid', 'incorrect', 'wrong', 'failed', 'error', 'bad credentials',
+            'authentication failed', 'login failed', 'inválido', 'incorrecto',
+            'usuario no encontrado', 'contraseña incorrecta'
         ]
 
-        class Baseline:
-            def __init__(self):
-                self.status      = -1
-                self.final_path  = ""   # solo el PATH de la URL, sin query
-                self.len_min     = 0
-                self.len_max     = 0
-                self.has_success_kw  = False
-                self.has_failure_kw  = False
+        def _normalize_path(url_value):
+            return (urlparse(url_value).path.rstrip('/') or '/').lower()
 
-        baselines = []
-        for form in login_forms:
-            bl = Baseline()
-            lens = []
-            for _ in range(3):
-                try:
-                    r = session.post(
-                        form['url'],
-                        data={form['user_field']: _IMPOSSIBLE_USER,
-                              form['pass_field']: _IMPOSSIBLE_PASS},
-                        timeout=DEFAULT_TIMEOUT, allow_redirects=True
-                    )
-                    if bl.status == -1:
-                        bl.status     = r.status_code
-                        bl.final_path = urlparse(r.url).path.rstrip('/') or '/'
-                        body_lower    = r.text.lower()
-                        bl.has_success_kw = any(k in body_lower for k in _SUCCESS_KEYWORDS)
-                        bl.has_failure_kw = any(k in body_lower for k in _FAILURE_KEYWORDS)
-                    lens.append(len(r.content))
-                except Exception:
-                    pass
-            if lens:
-                bl.len_min = min(lens)
-                bl.len_max = max(lens)
-                # Ampliar margen un 20 % para absorber variación dinámica normal
-                margin = max(int((bl.len_max - bl.len_min) * 0.2), 200)
-                bl.len_min = max(0, bl.len_min - margin)
-                bl.len_max = bl.len_max + margin
-            print_info(f"Baseline [{form['url']}]: status={bl.status} "
-                       f"path={bl.final_path} len=[{bl.len_min},{bl.len_max}]")
-            baselines.append(bl)
+        def _is_login_path(path_value):
+            p = (path_value or '').lower()
+            return any(k in p for k in ('login', 'signin', 'sign-in', 'auth', 'logon', 'wp-login', 'session'))
 
-        def is_successful_login(resp, bl):
-            """
-            Detecta login exitoso con baja tasa de falsos positivos.
-            Requiere al menos UNA señal FUERTE o DOS señales MEDIAS.
-            """
-            body_lower = resp.text.lower()
-            curr_path  = urlparse(resp.url).path.rstrip('/') or '/'
-            curr_len   = len(resp.content)
+        def _build_payload(user, pwd):
+            payload = {}
+            payload.update(primary_form.get('hidden_fields', {}))
+            payload[primary_form['user_field']] = user
+            payload[primary_form['pass_field']] = pwd
+            return payload
 
-            strong = 0
-            medium = 0
+        baseline_status = -1
+        baseline_path = _normalize_path(primary_form['url'])
+        fail_lengths = []
+        for seed_user in [_IMPOSSIBLE_USER, usernames[0] if usernames else _IMPOSSIBLE_USER, _IMPOSSIBLE_USER]:
+            try:
+                r = session.post(
+                    primary_form['url'],
+                    data=_build_payload(seed_user, _IMPOSSIBLE_PASS),
+                    timeout=DEFAULT_TIMEOUT,
+                    allow_redirects=True
+                )
+                if baseline_status == -1:
+                    baseline_status = r.status_code
+                    baseline_path = _normalize_path(r.url)
+                fail_lengths.append(len(r.content))
+            except Exception:
+                pass
 
-            # ── Señales FUERTES ───────────────────────────────────────────────
-            # A) El path de la URL cambió a algo distinto del baseline
-            #    (ej: /login → /dashboard). Ignoramos solo diferencia de query.
-            if bl.final_path and curr_path != bl.final_path:
-                strong += 1
+        if fail_lengths:
+            fail_min = min(fail_lengths)
+            fail_max = max(fail_lengths)
+            # Margen prudente para páginas dinámicas de login
+            margin = max(int((fail_max - fail_min) * 0.35), 250)
+            fail_min = max(0, fail_min - margin)
+            fail_max = fail_max + margin
+        else:
+            fail_min, fail_max = 0, 0
 
-            # B) La app redirigió (3xx) cuando antes devolvía 200
-            if bl.status == 200 and resp.status_code in (301, 302, 303, 307, 308):
-                strong += 1
+        print_info(
+            f"Baseline login: status={baseline_status} path={baseline_path} "
+            f"len=[{fail_min},{fail_max}]"
+        )
 
-            # ── Señales MEDIAS ────────────────────────────────────────────────
-            # C) El body contiene palabras de sesión activa que NO estaban en baseline
-            has_success = any(k in body_lower for k in _SUCCESS_KEYWORDS)
-            if has_success and not bl.has_success_kw:
-                medium += 1
+        def is_successful_login(resp_no_redirect, resp_follow):
+            body = resp_follow.text.lower()
+            final_path = _normalize_path(resp_follow.url)
+            final_len = len(resp_follow.content)
 
-            # D) El body ya NO contiene las palabras de error que sí estaban en baseline
-            has_failure = any(k in body_lower for k in _FAILURE_KEYWORDS)
-            if bl.has_failure_kw and not has_failure:
-                medium += 1
+            # Evidencia de fallo explícita
+            if any(k in body for k in FAILURE_KEYWORDS):
+                return False
 
-            # E) Tamaño del body está FUERA del rango calibrado de error
-            #    (umbral muy conservador para evitar falsos positivos con CSRF)
-            if bl.len_max > 0 and (curr_len < bl.len_min or curr_len > bl.len_max):
-                medium += 1
+            # Si seguimos en login, lo tratamos como fallo.
+            if _is_login_path(final_path):
+                return False
 
-            return strong >= 1 or medium >= 2
+            # Mismo comportamiento que baseline de fallo.
+            if baseline_status != -1 and resp_follow.status_code == baseline_status and final_path == baseline_path:
+                if fail_max > 0 and fail_min <= final_len <= fail_max:
+                    return False
 
+            location = resp_no_redirect.headers.get('Location', '')
+            location_path = _normalize_path(urljoin(primary_form['url'], location)) if location else ''
 
-        def try_cred(user, pwd, form, bl):
+            # Señal fuerte: redirect a ruta que no es login.
+            if resp_no_redirect.status_code in (301, 302, 303, 307, 308):
+                if location and not _is_login_path(location_path):
+                    return True
+
+            # Señal fuerte: contexto autenticado claro + URL fuera de login.
+            has_success_kw = any(k in body for k in SUCCESS_KEYWORDS)
+            if has_success_kw and not _is_login_path(final_path):
+                return True
+
+            # Señal de apoyo conservadora: cambio de ruta fuera de login + tamaño fuera de baseline.
+            if final_path != baseline_path and not _is_login_path(final_path):
+                if fail_max > 0 and (final_len < fail_min or final_len > fail_max):
+                    return True
+
+            return False
+
+        def try_cred(user, pwd):
             try:
                 if REQUEST_DELAY > 0:
                     time.sleep(REQUEST_DELAY)
-                resp = session.post(
-                    form['url'],
-                    data={form['user_field']: user, form['pass_field']: pwd},
-                    timeout=DEFAULT_TIMEOUT, allow_redirects=True
+                payload = _build_payload(user, pwd)
+                resp_no_redirect = session.post(
+                    primary_form['url'],
+                    data=payload,
+                    timeout=DEFAULT_TIMEOUT,
+                    allow_redirects=False
                 )
-                if is_successful_login(resp, bl):
+
+                resp_follow = session.post(
+                    primary_form['url'],
+                    data=payload,
+                    timeout=DEFAULT_TIMEOUT,
+                    allow_redirects=True
+                )
+
+                if is_successful_login(resp_no_redirect, resp_follow):
                     found_credentials.add((user, pwd))
                     return True
             except Exception:
@@ -1856,24 +1979,21 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
                     futures = []
                     for user in usernames:
                         for pwd in passwords:
-                            for form, bl in zip(login_forms, baselines):
-                                futures.append(executor.submit(try_cred, user, pwd, form, bl))
+                            futures.append(executor.submit(try_cred, user, pwd))
                     for future in as_completed(futures):
                         future.result()
                         pbar.update(1)
         else:
             completed = 0
-            total_tasks = total_combinations * len(login_forms)
             with ThreadPoolExecutor(max_workers=max_threads) as executor:
                 futures = []
                 for user in usernames:
                     for pwd in passwords:
-                        for form, bl in zip(login_forms, baselines):
-                            futures.append(executor.submit(try_cred, user, pwd, form, bl))
+                        futures.append(executor.submit(try_cred, user, pwd))
                 for future in as_completed(futures):
                     completed += 1
-                    if completed % 100 == 0 or completed == total_tasks:
-                        print_info(f"Progreso bruteforce: {completed}/{total_tasks} combinaciones probadas")
+                    if completed % 100 == 0 or completed == total_combinations:
+                        print_info(f"Progreso bruteforce: {completed}/{total_combinations} combinaciones probadas")
                     future.result()
         
         if found_credentials:
@@ -2081,6 +2201,14 @@ def run_directory_fuzzing(target, session):
 def run_injection_tests(target, session):
     print_info("=== PRUEBAS DE INYECCIÓN AVANZADAS ===")
     forms, url_params = safe_execute(extract_forms_and_params, target, session)
+    SCAN_DATA["injection"] = {
+        "executed": True,
+        "forms_found": len(forms or []),
+        "url_params_found": len(url_params or []),
+        "tested_get_params": [],
+        "tested_form_inputs": [],
+        "forms": (forms or [])[:120],
+    }
     if not forms and not url_params:
         print_warning("No se encontraron parámetros ni formularios para probar.")
         return
@@ -2090,14 +2218,20 @@ def run_injection_tests(target, session):
             safe_execute(advanced_injection_tests, target, param, session, 'GET')
             safe_execute(test_path_traversal, target, param, session, 'GET')
             safe_execute(test_open_redirect, target, param, session, 'GET')
+            SCAN_DATA["injection"]["tested_get_params"].append(param)
     if forms:
         print_info(f"Probando {len(forms)} formularios...")
         for form in forms:
             action = form['action']
             method = form['method']
             inputs = form['inputs']
-            form_url = urljoin(target, action) if action else target
+            form_url = action if action else form.get('page_url', target)
             for inp in inputs:
+                SCAN_DATA["injection"]["tested_form_inputs"].append({
+                    "url": form_url,
+                    "method": method,
+                    "input": inp,
+                })
                 if method == 'POST':
                     safe_execute(advanced_injection_tests, form_url, inp, session, 'POST')
                     safe_execute(test_path_traversal, form_url, inp, session, 'POST')
@@ -2257,6 +2391,7 @@ def main():
         has_scan_data = any([
             bool(FINDINGS),
             bool(SCAN_DATA.get("general")),
+            bool(SCAN_DATA.get("injection")),
             bool(SCAN_DATA.get("api_endpoints")),
             bool(SCAN_DATA.get("directory_hits")),
             bool(SCAN_DATA.get("users")),
