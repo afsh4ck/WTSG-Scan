@@ -521,7 +521,7 @@ def _build_html_report(report_data):
 <head>
     <meta charset=\"utf-8\">
     <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
-    <title>WSTG Report - {{_html_escape(report_data.get('target', ''))}}</title>
+    <title>WSTG Report - {_html_escape(report_data.get('target', ''))}</title>
     <style>
         :root {{
             --bg:#f5f7fb; --panel:#ffffff; --text:#0b1320; --muted:#5c687a; --border:#d8deea;
@@ -558,7 +558,46 @@ def _build_html_report(report_data):
     </style>
 </head>
 <body>
-    <div class=\"wrap\">
+    <div class="wrap">
+        <div class="card top">
+            <div class='target-card'>
+                <span class='target-icon'>🌐</span>
+                <div>
+                    <div style='font-size:1.35rem; font-weight:600; color:var(--accent);'>{_html_escape(report_data.get('target', ''))}</div>
+                    <div class='target-meta'>Fecha: {_html_escape(report_data.get('date', ''))}</div>
+                </div>
+            </div>
+            <button id="themeBtn" class="btn" title='Cambiar tema'><span id='themeIcon'>🌙</span></button>
+        </div>
+
+        {nav_html}
+
+        <div class="card" id='resumen'>
+            <h3>Resumen</h3>
+            <div class="kpi">
+                <div><span class="muted">Hallazgos</span><b>{len(findings)}</b></div>
+                <div><span class="muted">Tecnologías</span><b>{len(technologies)}</b></div>
+                <div><span class="muted">API</span><b>{len(endpoints)}</b></div>
+                <div><span class="muted">Directorios</span><b>{len(dirs)}</b></div>
+                <div><span class="muted">Usuarios</span><b>{len(users)}</b></div>
+                <div><span class="muted">Credenciales</span><b>{len(creds)}</b></div>
+            </div>
+            <pre>{_html_escape(json.dumps(meta, indent=2, ensure_ascii=False))}</pre>
+        </div>
+
+        <div class="card" id='info'>
+            <h3>Información general</h3>
+            <p><b>Servidor:</b> {_html_escape(scan_data.get('general', {}).get('server', 'N/A'))}</p>
+            <p><b>Status:</b> {_html_escape(scan_data.get('general', {}).get('status_code', 'N/A'))}</p>
+            <p><b>Tecnologías:</b><br>{technologies_html}</p>
+            <p><b>Usuarios:</b><br>{users_html}</p>
+            <p><b>Emails:</b><br>{emails_html}</p>
+        </div>
+
+        <div class="card" id='hallazgos'><h3>Hallazgos</h3><ul>{findings_items}</ul></div>
+
+        <div class="card" id='api'>
+            <h3>Endpoints API detectados</h3>
         <div class=\"card top\">
             <div class='target-card'>
                 <span class='target-icon'>🌐</span>
