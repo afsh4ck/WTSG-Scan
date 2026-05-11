@@ -240,7 +240,7 @@ def install_whatweb():
     """Ofrece instalar WhatWeb via apt si no está disponible."""
     print_warning("WhatWeb no está instalado.")
     try:
-        resp = input("¿Instalar WhatWeb automáticamente? (requiere sudo) [s/N]: ").strip().lower()
+        resp = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Instalar WhatWeb automáticamente? (requiere sudo) [s/N]: ").strip().lower()
     except (KeyboardInterrupt, EOFError):
         return False
     if resp != 's':
@@ -811,7 +811,7 @@ def check_seclists():
         return SECLISTS_MEDIUM
     else:
         print_warning("No se encontró SecLists en las rutas por defecto.")
-        response = input_path("¿Deseas instalar SecLists automáticamente? (requiere sudo) [s/N]: ").strip().lower()
+        response = input_path(f"¿Deseas instalar SecLists automáticamente? (requiere sudo) [s/N]: ").strip().lower()
         if response == 's':
             try:
                 print_info("Ejecutando: sudo apt update && sudo apt install seclists -y")
@@ -833,12 +833,12 @@ def check_seclists():
 def setup_authentication():
     global AUTHENTICATED, AUTH_SESSION, TARGET_URL
     print_info("Configuración de autenticación")
-    login_url = input("URL de login (dejar vacío si es la misma que la objetivo): ").strip()
+    login_url = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} URL de login (dejar vacío si es la misma que la objetivo): ").strip()
     if not login_url:
         login_url = TARGET_URL
     else:
         login_url = normalize_url(login_url)
-    username = input("Usuario: ")
+    username = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Usuario: ")
     password = getpass.getpass("Contraseña: ")
 
     temp_session = get_session()
@@ -1817,13 +1817,13 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
         use_hydra = False
         hydra_path = shutil.which("hydra")
         if hydra_path:
-            resp = input("¿Usar hydra para el bruteforce? [S/n]: ").strip().lower()
+            resp = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Usar hydra para el bruteforce? [S/n]: ").strip().lower()
             use_hydra = (resp != 'n')
         else:
             print_warning("hydra no está instalado o no está en PATH. Usando método interno.")
 
-        login_url = input("Introduce la URL real del login (dejar vacío para autodetección): ").strip()
-        error_msg = input("Introduce el mensaje de error exacto (vacío para heurística): ").strip()
+        login_url = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Introduce la URL real del login (dejar vacío para autodetección): ").strip()
+        error_msg = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Introduce el mensaje de error exacto (vacío para heurística): ").strip()
 
         # Si no se especifica, autodetectar como antes
         login_forms_map = {}
@@ -1978,17 +1978,20 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
             login_url_hydra = primary_form['url']
             user_field = primary_form['user_field']
             pass_field = primary_form['pass_field']
+            parsed_url = urlparse(login_url_hydra)
+            host = parsed_url.hostname
+            path = parsed_url.path or '/'
             # Construir string de datos POST
-            post_data = f"{user_field}=^USER^{pass_field}=^PASS^"
+            post_data = f"{user_field}=^USER^&{pass_field}=^PASS^"
             for k, v in primary_form.get('hidden_fields', {}).items():
                 post_data += f"&{k}={v}"
             # Mensaje de error personalizado
             fail_flag = error_msg if error_msg else "login failed"
             hydra_cmd = [
                 "hydra", "-L", ufile_path, "-P", pfile_path,
-                login_url_hydra,
+                host,
                 "http-post-form",
-                f"{urlparse(login_url_hydra).path}:{post_data}:{fail_flag}"
+                f"{path}:{post_data}:{fail_flag}"
             ]
             print_info(f"Ejecutando hydra: {' '.join(hydra_cmd)}")
             try:
@@ -2337,7 +2340,7 @@ def run_information_gathering(target, session):
 
 def run_directory_fuzzing(target, session):
     print_info("=== FUZZING DE DIRECTORIOS ===")
-    use_default = input("¿Usar wordlist por defecto (SecLists small)? [S/n]: ").strip().lower()
+    use_default = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Usar wordlist por defecto (SecLists small)? [S/n]: ").strip().lower()
     wordlist = None
     if use_default == 'n':
         custom_wl = input_path("Ruta a wordlist personalizada: ").strip()
@@ -2346,7 +2349,7 @@ def run_directory_fuzzing(target, session):
         else:
             print_warning("No se proporcionó wordlist. Usando lista interna.")
     if check_ffuf():
-        use_ffuf = input("¿Usar ffuf para fuzzing? (recomendado) [S/n]: ").strip().lower() != 'n'
+        use_ffuf = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Usar ffuf para fuzzing? (recomendado) [S/n]: ").strip().lower() != 'n'
     else:
         use_ffuf = False
         print_warning("ffuf no está instalado. Usando método interno.")
@@ -2430,11 +2433,11 @@ def run_user_enum_bruteforce(target, session):
     if emails:
         print_good(f"Emails encontrados: {', '.join(emails)}")
     safe_execute(test_user_enumeration_form, target, session)
-    want_brute = input("¿Desea realizar fuerza bruta de contraseñas? (s/n): ").strip().lower()
+    want_brute = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Desea realizar fuerza bruta de contraseñas? (s/n): ").strip().lower()
     if want_brute == 's':
         passlist = input_path("Ruta a wordlist de contraseñas (dejar vacío para usar por defecto de SecLists): ").strip()
         if not users:
-            users_input = input("Introduce usuarios separados por comas: ").strip()
+            users_input = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Introduce usuarios separados por comas: ").strip()
             if users_input:
                 users = [u.strip() for u in users_input.split(',') if u.strip()]
             else:
@@ -2445,17 +2448,17 @@ def run_user_enum_bruteforce(target, session):
 
 def run_spider(target, session):
     print_info("=== SPIDERING / MAPEO COMPLETO DEL SITIO ===")
-    max_pages = input("Máximo número de páginas a rastrear (default 500): ").strip()
+    max_pages = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Máximo número de páginas a rastrear (default 500): ").strip()
     if not max_pages:
         max_pages = 500
     else:
         max_pages = int(max_pages)
-    max_depth = input("Profundidad máxima de rastreo (default 3): ").strip()
+    max_depth = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Profundidad máxima de rastreo (default 3): ").strip()
     if not max_depth:
         max_depth = 3
     else:
         max_depth = int(max_depth)
-    use_robots = input("¿Respetar robots.txt? [S/n]: ").strip().lower() != 'n'
+    use_robots = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Respetar robots.txt? [S/n]: ").strip().lower() != 'n'
     urls, params, forms = spider_website(target, session, max_pages=max_pages, max_depth=max_depth, use_robots=use_robots)
     SCAN_DATA["spider"] = {
         "total_urls": len(urls),
