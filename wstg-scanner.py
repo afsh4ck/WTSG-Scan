@@ -1,40 +1,25 @@
 import shlex
-
-# ========== INTEGRACIÓN NUCLEI ==========
-def check_nuclei():
-    path = shutil.which("nuclei")
-    if path:
-        return path
-    resp = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Nuclei no está instalado. ¿Instalar automáticamente con apt? [S/n]: ").strip().lower()
-    if resp == 'n':
-        print_warning("No se instalará Nuclei. Opción cancelada.")
-        return None
-    try:
-        print_info("Instalando Nuclei con apt...")
-        subprocess.run(["sudo", "apt", "update"], check=True)
-        subprocess.run(["sudo", "apt", "install", "-y", "nuclei"], check=True)
-        path = shutil.which("nuclei")
-        if path:
-            print_good("Nuclei instalado correctamente.")
-            return path
-        else:
-            print_error("No se pudo instalar Nuclei.")
-    except Exception as e:
-        print_error(f"Error instalando Nuclei: {e}")
-    return None
-
-def run_nuclei_scan(target):
     nuclei_path = check_nuclei()
     if not nuclei_path:
         return None
     print_info(f"Ejecutando Nuclei sobre {target}...")
     import tempfile
     findings = []
-    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp_json:
-        json_path = tmp_json.name
-    except KeyboardInterrupt:
-        process.terminate()
-        print_warning("Nuclei interrumpido por el usuario.")
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp_json:
+            json_path = tmp_json.name
+        # Ejecutar Nuclei
+        cmd = [nuclei_path, "-u", target, "-json-export", json_path]
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        for line in process.stdout:
+            print(line, end='')
+        process.wait()
+        # Intentar leer el JSON generado
+        try:
+            with open(json_path, "r", encoding="utf-8", errors="ignore") as f:
+                for l in f:
+                    try:
+                        data = json.loads(l)
                         if isinstance(data, dict) and data.get('templateID'):
                             findings.append(data)
                     except Exception:
@@ -60,20 +45,35 @@ def run_nuclei_scan(target):
     except KeyboardInterrupt:
         process.terminate()
         print_warning("Nuclei interrumpido por el usuario.")
-                            sev = parts[2].replace("[","").strip().lower()
-                            template = parts[1].replace("[","").strip()
-                            url = parts[3].strip()
-                            findings.append({
-                                "severity": sev,
-                                "template": template,
-                                "url": url,
-                                "raw": line.strip()
-                            })
-    except KeyboardInterrupt:
-        process.terminate()
-        print_warning("Nuclei interrumpido por el usuario.")
+        return []
+
     print_info(f"Total vulnerabilidades detectadas por Nuclei: {len(findings)}")
     # Resumen agrupado por severidad y template
+    summary = {}
+    for f in findings:
+        sev = f.get('info', {}).get('severity', f.get('severity', 'unknown'))
+        tid = f.get('templateID', f.get('template', 'unknown'))
+        summary.setdefault(sev, []).append(tid)
+    print("\nResumen de vulnerabilidades:")
+    for sev, tids in summary.items():
+        print(f"  {sev.upper()}: {len(tids)} hallazgos ({', '.join(sorted(set(tids)))})")
+    # Acumular en SCAN_DATA
+    if 'nuclei_findings' not in SCAN_DATA or not isinstance(SCAN_DATA['nuclei_findings'], list):
+        SCAN_DATA['nuclei_findings'] = []
+    SCAN_DATA['nuclei_findings'].extend(findings)
+
+    # Acumular summary por severidad
+    if 'nuclei_summary' not in SCAN_DATA or not isinstance(SCAN_DATA['nuclei_summary'], dict):
+        SCAN_DATA['nuclei_summary'] = {}
+    for sev, tids in summary.items():
+        if sev not in SCAN_DATA['nuclei_summary']:
+            SCAN_DATA['nuclei_summary'][sev] = []
+        # Añadir solo los nuevos templateID
+        prev = set(SCAN_DATA['nuclei_summary'][sev])
+        nuevos = [tid for tid in tids if tid not in prev]
+        SCAN_DATA['nuclei_summary'][sev].extend(nuevos)
+        SCAN_DATA['nuclei_summary'][sev] = list(sorted(set(SCAN_DATA['nuclei_summary'][sev])))
+    return findings
     summary = {}
     for f in findings:
         sev = f.get('info', {}).get('severity', f.get('severity', 'unknown'))
