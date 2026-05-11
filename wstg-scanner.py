@@ -80,9 +80,22 @@ def run_nuclei_scan(target):
     print("\nResumen de vulnerabilidades:")
     for sev, tids in summary.items():
         print(f"  {sev.upper()}: {len(tids)} hallazgos ({', '.join(sorted(set(tids)))})")
-    # Guardar en SCAN_DATA
-    SCAN_DATA['nuclei_findings'] = findings
-    SCAN_DATA['nuclei_summary'] = {k: list(sorted(set(v))) for k,v in summary.items()}
+    # Acumular en SCAN_DATA
+    if 'nuclei_findings' not in SCAN_DATA or not isinstance(SCAN_DATA['nuclei_findings'], list):
+        SCAN_DATA['nuclei_findings'] = []
+    SCAN_DATA['nuclei_findings'].extend(findings)
+
+    # Acumular summary por severidad
+    if 'nuclei_summary' not in SCAN_DATA or not isinstance(SCAN_DATA['nuclei_summary'], dict):
+        SCAN_DATA['nuclei_summary'] = {}
+    for sev, tids in summary.items():
+        if sev not in SCAN_DATA['nuclei_summary']:
+            SCAN_DATA['nuclei_summary'][sev] = []
+        # Añadir solo los nuevos templateID
+        prev = set(SCAN_DATA['nuclei_summary'][sev])
+        nuevos = [tid for tid in tids if tid not in prev]
+        SCAN_DATA['nuclei_summary'][sev].extend(nuevos)
+        SCAN_DATA['nuclei_summary'][sev] = list(sorted(set(SCAN_DATA['nuclei_summary'][sev])))
     return findings
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
@@ -2654,12 +2667,14 @@ def run_spider(target, session):
 
 def run_full_pentest(target, session):
     print_info("\n======= INICIANDO PENTESTING COMPLETO =======\n")
-    run_information_gathering(target, session)
-    run_spider(target, session)
-    run_directory_fuzzing(target, session)
-    run_injection_tests(target, session)
-    run_api_tests(target, session)
-    run_user_enum_bruteforce(target, session)
+    # Orden según menú principal:
+    run_information_gathering(target, session)         # 2
+    run_nuclei_scan(target)                            # 3
+    run_directory_fuzzing(target, session)             # 4
+    run_spider(target, session)                        # 5
+    run_injection_tests(target, session)               # 6
+    run_api_tests(target, session)                     # 7
+    run_user_enum_bruteforce(target, session)          # 8
     print_good("Pentesting completo finalizado.")
 
 def main():
