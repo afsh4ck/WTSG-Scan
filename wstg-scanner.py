@@ -621,13 +621,13 @@ def _build_html_report(report_data):
                 <div><span class=\"muted\">Usuarios</span><b>{len(users)}</b></div>
                 <div><span class=\"muted\">Credenciales</span><b>{len(creds)}</b></div>
             </div>
-            <pre>{{_html_escape(json.dumps(meta, indent=2, ensure_ascii=False))}}</pre>
+            <pre>{_html_escape(json.dumps(meta, indent=2, ensure_ascii=False))}</pre>
         </div>
 
         <div class=\"card\" id='info'>
             <h3>Información general</h3>
-            <p><b>Servidor:</b> {{_html_escape(scan_data.get('general', {}).get('server', 'N/A'))}}</p>
-            <p><b>Status:</b> {{_html_escape(scan_data.get('general', {}).get('status_code', 'N/A'))}}</p>
+            <p><b>Servidor:</b> {_html_escape(scan_data.get('general', {}).get('server', 'N/A'))}</p>
+            <p><b>Status:</b> {_html_escape(scan_data.get('general', {}).get('status_code', 'N/A'))}</p>
             <p><b>Tecnologías:</b><br>{technologies_html}</p>
             <p><b>Usuarios:</b><br>{users_html}</p>
             <p><b>Emails:</b><br>{emails_html}</p>
