@@ -139,7 +139,7 @@ COMMON_DIRS = [
     ".well-known/security.txt", "package.json", "composer.json", "server-status"
 ]
 
-SECLISTS_SMALL = "/usr/share/seclists/Discovery/Web-Content/directory-list-2.3-small.txt"
+SECLISTS_SMALL = "/usr/share/seclists/Discovery/Web-Content/raft-small-directories.txt"
 SECLISTS_MEDIUM = "/usr/share/seclists/Discovery/Web-Content/directory-list-lowercase-2.3-medium.txt"
 SECLISTS_PASSWORDS = "/usr/share/seclists/Passwords/xato-net-10-million-passwords-10000.txt"
 DEFAULT_PASSWORDS = [
@@ -546,34 +546,42 @@ def run_nuclei_scan(target):
 
     print_info(f"Total vulnerabilidades detectadas por Nuclei: {len(normalized)}")
     if normalized:
-        # Tabla resumen por severidad con anchos dinámicos
-        sev_col = max(len("Severidad"), max(len(s) for s in summary.keys()))
-        qty_col = max(len("Cantidad"), max(len(str(len(t))) for t in summary.values()))
-        rows = []
+        # Tabla resumen por severidad
+        sum_rows = []
         for sev in sorted(summary.keys(), key=lambda s: SEV_ORDER.get(s, 99)):
             unique_str = ', '.join(sorted(set(summary[sev])))
             display = unique_str if len(unique_str) <= 100 else unique_str[:97] + '...'
-            rows.append((sev.upper(), str(len(summary[sev])), display))
-        tpl_col = max(len("Templates únicos"), max(len(r[2]) for r in rows))
-        sep = "+" + "-" * (sev_col + 2) + "+" + "-" * (qty_col + 2) + "+" + "-" * (tpl_col + 2) + "+"
-        print("\nResumen de vulnerabilidades por severidad:")
-        print(sep)
-        print(f"| {'Severidad':<{sev_col}} | {'Cantidad':<{qty_col}} | {'Templates únicos':<{tpl_col}} |")
-        print(sep)
-        for sev_str, qty_str, tpl_str in rows:
-            print(f"| {sev_str:<{sev_col}} | {qty_str:<{qty_col}} | {tpl_str:<{tpl_col}} |")
-        print(sep)
+            color = SEV_COLOR.get(sev, Fore.WHITE)
+            sum_rows.append([
+                f"{color}{sev.upper()}{Style.RESET_ALL}",
+                str(len(summary[sev])),
+                display,
+            ])
+        print_table(
+            headers=["Severidad", "Cantidad", "Templates únicos"],
+            rows=sum_rows,
+            alignments=['<', '>', '<'],
+            title="Resumen de vulnerabilidades por severidad:",
+        )
 
-        # Detalle por hallazgo (solo severidades relevantes en consola)
+        # Tabla de hallazgos relevantes (críticos/altos/medios/bajos)
         relevant = [n for n in normalized if n['severity'] in ('critical', 'high', 'medium', 'low')]
         if relevant:
-            print("\nHallazgos relevantes:")
+            rel_rows = []
             for n in relevant[:50]:
                 color = SEV_COLOR.get(n['severity'], Fore.WHITE)
-                print(f"  {color}[{n['severity'].upper():<8}]{Style.RESET_ALL} "
-                      f"{n['template_id']:<40} -> {n['url']}")
-                if n['name']:
-                    print(f"             {n['name']}")
+                rel_rows.append([
+                    f"{color}{n['severity'].upper()}{Style.RESET_ALL}",
+                    n['template_id'],
+                    n['name'] or '-',
+                    n['url'] or '-',
+                ])
+            print_table(
+                headers=["Severidad", "Template", "Nombre", "URL"],
+                rows=rel_rows,
+                alignments=['<', '<', '<', '<'],
+                title="Hallazgos relevantes:",
+            )
             if len(relevant) > 50:
                 print(f"  ... y {len(relevant) - 50} hallazgos relevantes más (ver reporte)")
 
@@ -618,6 +626,67 @@ def print_error(msg):
 def print_vuln(msg):
     FINDINGS.append(f"[VULN] {msg}")
     print(f"{Fore.MAGENTA}[VULN]{Style.RESET_ALL} {msg}")
+
+# Regex para descontar códigos ANSI al medir ancho visible
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
+
+def _visible_len(s):
+    return len(_ANSI_RE.sub('', str(s)))
+
+def _pad_cell(cell, width, align='<'):
+    """Pad una celda al ancho dado, ignorando códigos ANSI para el cálculo."""
+    cell_str = str(cell)
+    pad = width - _visible_len(cell_str)
+    if pad <= 0:
+        return cell_str
+    if align == '<':
+        return cell_str + ' ' * pad
+    if align == '>':
+        return ' ' * pad + cell_str
+    left = pad // 2
+    return ' ' * left + cell_str + ' ' * (pad - left)
+
+def print_table(headers, rows, alignments=None, title=None, border_color=None, footer=None):
+    """Imprime una tabla box-drawing con anchos dinámicos.
+
+    headers: list[str]
+    rows: list[list[str]] (las celdas pueden contener códigos ANSI)
+    alignments: list[str] con '<', '>' o '^' por columna (default '<')
+    title: cadena opcional encima de la tabla
+    footer: cadena opcional debajo de la tabla
+    """
+    if not headers:
+        return
+    n_cols = len(headers)
+    alignments = alignments or ['<'] * n_cols
+    if len(alignments) < n_cols:
+        alignments = list(alignments) + ['<'] * (n_cols - len(alignments))
+    widths = [len(h) for h in headers]
+    for r in rows:
+        for i in range(n_cols):
+            if i < len(r):
+                widths[i] = max(widths[i], _visible_len(r[i]))
+    color = border_color if border_color is not None else Fore.CYAN
+    rc = Style.RESET_ALL
+    top = "┌" + "┬".join("─" * (w + 2) for w in widths) + "┐"
+    mid = "├" + "┼".join("─" * (w + 2) for w in widths) + "┤"
+    bot = "└" + "┴".join("─" * (w + 2) for w in widths) + "┘"
+    if title:
+        print(f"\n{color}{title}{rc}")
+    print(f"{color}{top}{rc}")
+    header_line = " │ ".join(_pad_cell(h, widths[i], alignments[i]) for i, h in enumerate(headers))
+    print(f"{color}│{rc} {color}{header_line}{rc} {color}│{rc}")
+    print(f"{color}{mid}{rc}")
+    for r in rows:
+        cells = [
+            _pad_cell(r[i] if i < len(r) else '', widths[i], alignments[i])
+            for i in range(n_cols)
+        ]
+        line = f" {color}│{rc} ".join(cells)
+        print(f"{color}│{rc} {line} {color}│{rc}")
+    print(f"{color}{bot}{rc}")
+    if footer:
+        print(footer)
 
 def _safe_filename_from_url(target_url):
     """Genera un nombre de archivo estable en base a la URL objetivo."""
@@ -1396,16 +1465,12 @@ def dir_bruteforce(target, session, wordlist=None, threads=THREADS, use_ffuf=Tru
                             401: Fore.YELLOW, 403: Fore.YELLOW,
                             500: Fore.RED,    503: Fore.RED,
                         }
-                        SEP = "─" * 62
-
-                        print(f"\n{Fore.CYAN}{SEP}{Style.RESET_ALL}")
-                        print(f"{Fore.CYAN}  {'PATH':<32} {'STATUS':<8} {'SIZE':<9} {'WORDS':<7} {'DUR'}{Style.RESET_ALL}")
-                        print(f"{Fore.CYAN}{SEP}{Style.RESET_ALL}")
 
                         if not hits:
-                            print(f"  {Fore.YELLOW}Sin resultados (todos filtrados por auto-calibración){Style.RESET_ALL}")
+                            print(f"\n  {Fore.YELLOW}Sin resultados (todos filtrados por auto-calibración){Style.RESET_ALL}\n")
                         else:
-                            for hit in sorted(hits, key=lambda x: x.get('status', 0)):
+                            table_rows = []
+                            for hit in sorted(hits, key=lambda x: (x.get('status', 0), x.get('input', {}).get('FUZZ', ''))):
                                 path    = hit.get('input', {}).get('FUZZ', '') or hit.get('url', '')
                                 status  = hit.get('status', 0)
                                 size    = hit.get('length', 0)
@@ -1414,16 +1479,21 @@ def dir_bruteforce(target, session, wordlist=None, threads=THREADS, use_ffuf=Tru
                                 dur_ms  = dur_ns // 1_000_000 if dur_ns else 0
                                 url_hit = hit.get('url', urljoin(target, path))
                                 color   = STATUS_COLOR.get(status, Fore.WHITE)
-                                print(
-                                    f"  {color}[{status}]{Style.RESET_ALL}  "
-                                    f"{Fore.WHITE}{path:<30}{Style.RESET_ALL}  "
-                                    f"Size:{str(size):<7}  Words:{str(words_h):<5}  {dur_ms}ms"
-                                )
+                                table_rows.append([
+                                    f"{color}[{status}]{Style.RESET_ALL}",
+                                    path,
+                                    f"{size:,}",
+                                    f"{words_h:,}",
+                                    f"{dur_ms}ms",
+                                ])
                                 results.append({'url': url_hit, 'status': status, 'size': size})
                                 FINDINGS.append(f"[DIR] {url_hit} [{status}]")
-
-                        print(f"{Fore.CYAN}{SEP}{Style.RESET_ALL}")
-                        print(f"  Total: {Fore.GREEN}{len(hits)}{Style.RESET_ALL} endpoint(s) encontrados\n")
+                            print_table(
+                                headers=["STATUS", "PATH", "SIZE", "WORDS", "DUR"],
+                                rows=table_rows,
+                                alignments=['<', '<', '>', '>', '>'],
+                                footer=f"  Total: {Fore.GREEN}{len(hits)}{Style.RESET_ALL} endpoint(s) encontrados\n",
+                            )
                     except Exception as e:
                         print_error(f"Error leyendo JSON de ffuf: {e}")
 
@@ -1865,6 +1935,29 @@ def discover_api_endpoints(target, session):
             except Exception:
                 pass
         print_info(f"Total endpoints API encontrados/accesibles: {len(found)}")
+        if found:
+            STATUS_COLOR = {
+                200: Fore.GREEN, 201: Fore.GREEN,
+                301: Fore.CYAN, 302: Fore.CYAN,
+                401: Fore.YELLOW, 403: Fore.YELLOW,
+                500: Fore.RED, 503: Fore.RED,
+            }
+            rows = []
+            for item in sorted(found, key=lambda x: (x.get('status', 0), x.get('endpoint', ''))):
+                st = item.get('status', 0)
+                color = STATUS_COLOR.get(st, Fore.WHITE)
+                rows.append([
+                    f"{color}[{st}]{Style.RESET_ALL}",
+                    item.get('endpoint', ''),
+                    item.get('url', ''),
+                    item.get('content_type', '') or '-',
+                ])
+            print_table(
+                headers=["STATUS", "ENDPOINT", "URL", "CONTENT-TYPE"],
+                rows=rows,
+                alignments=['<', '<', '<', '<'],
+                title="Endpoints API descubiertos:",
+            )
     except Exception as e:
         print_error(f"Error descubriendo endpoints: {e}")
     return found
@@ -2593,11 +2686,21 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
         all_creds = prev_creds | found_credentials
         if all_creds:
             print_good(f"Bruteforce completado. Credenciales únicas encontradas: {len(all_creds)}")
-            for user, pwd in sorted(all_creds):
-                print_vuln(f"  {user}:{pwd}")
+            rows = [
+                [f"{Fore.MAGENTA}{u}{Style.RESET_ALL}", f"{Fore.MAGENTA}{p}{Style.RESET_ALL}"]
+                for u, p in sorted(all_creds)
+            ]
+            print_table(
+                headers=["USUARIO", "CONTRASEÑA"],
+                rows=rows,
+                title="Credenciales válidas:",
+            )
+            # Registrar también en FINDINGS
+            for u, p in sorted(all_creds):
+                FINDINGS.append(f"[CRED] {u}:{p}")
             result_data["credentials"] = [
-                {"username": user, "password": pwd}
-                for user, pwd in sorted(all_creds)
+                {"username": u, "password": p}
+                for u, p in sorted(all_creds)
             ]
         else:
             print_info("Bruteforce completado. No se encontraron credenciales válidas.")
@@ -2810,7 +2913,7 @@ def run_information_gathering(target, session):
 
 def run_directory_fuzzing(target, session):
     print_info("\n======= FUZZING DE DIRECTORIOS =======\n")
-    use_default = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Usar wordlist por defecto (SecLists small)? [S/n]: ").strip().lower()
+    use_default = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Usar wordlist por defecto (raft-small-directories)? [S/n]: ").strip().lower()
     wordlist = None
     if use_default == 'n':
         custom_wl = input_path("Ruta a wordlist personalizada: ").strip()
