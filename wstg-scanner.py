@@ -53,7 +53,6 @@ except ImportError:
     HAS_TQDM = False
 
 # ========== BANNER ==========
-DESCRIPTION = "OWASP Web Security Testing Scanner"
 BANNER = r"""
  _       __       __         _____                   
 | |     / /_____ / /_ ____ _/ ___/ _____ ____ _ ____ 
@@ -62,6 +61,7 @@ BANNER = r"""
 |__/|__//____/ \__/ \__, //____/ \___/ \__,_//_/ /_/ 
                    /____/                            
 """
+DESCRIPTION = "OWASP Web Security Testing Scanner"
 DEVELOPER = "developed by @afsh4ck"
 
 # ========== CONFIGURACIÓN ==========
@@ -1012,9 +1012,9 @@ def spider_website(target, session, max_pages=500, max_depth=3, use_robots=True)
 def show_menu():
     clear_screen()
     if HAS_COLOR:
-        print(Fore.CYAN + DESCRIPTION + Style.RESET_ALL)
         print(Fore.CYAN + BANNER + Style.RESET_ALL)
-        print(Fore.GREEN + DEVELOPER + Style.RESET_ALL + "\n")
+	print(Fore.CYAN + DESCRIPTION + Style.RESET_ALL)
+	print(Fore.GREEN + DEVELOPER + Style.RESET_ALL + "\n")
     else:
         print(DESCRIPTION)
         print(BANNER)
