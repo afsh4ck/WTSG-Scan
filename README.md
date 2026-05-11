@@ -106,13 +106,13 @@ Diseñada para security researchers y pentesters, automatiza tareas comunes de r
 | Python | 3.6+ | ✅ Sí |
 | pip | Última | ✅ Sí |
 | ffuf | Última | ❌ Opcional (mejora rendimiento) |
-| SecLists | Última | ❌ Opcional (wordlists) |
+| SecLists | Última | ❌ Opcional (wordlists) 
 
 ### Requisitos del Sistema
 - **RAM**: Mínimo 512 MB, recomendado 2 GB
 - **Almacenamiento**: 500 MB para dependencias
 - **Red**: Conexión a internet
-- **SO**: Linux, macOS o Windows
+- **SO**: Kali Linux
 
 ---
 
@@ -341,7 +341,6 @@ Instala ffuf manualmente desde [https://github.com/ffuf/ffuf](https://github.com
 - [OWASP Top 10](https://owasp.org/www-project-top-ten/) - Top 10 vulnerabilidades
 - [ffuf Docs](https://github.com/ffuf/ffuf) - Documentación de ffuf
 - [SecLists](https://github.com/danielmiessler/SecLists) - Listas útiles para pentesting
-- [HackTricks](https://book.hacktricks.xyz/) - Trucos y técnicas
 
 ---
 
@@ -394,6 +393,24 @@ Este proyecto está bajo la licencia **MIT**. Ver [LICENSE](LICENSE) para detall
 "This tool is for authorized security testing only.
 Unauthorized access to computer systems is illegal."
 ```
+
+---
+
+## 🚀 Funcionalidades Destacadas (2026)
+
+- **Reconocimiento avanzado**: Spidering, detección de tecnologías (WhatWeb), análisis de headers, cookies y métodos HTTP.
+- **Fuzzing de directorios**: Integración con ffuf (opcional) y método interno, con guardado automático y parcial de resultados en caso de interrupción.
+- **Pruebas de inyección**: SQLi (error/time/boolean), XSS, Path Traversal/LFI, Command Injection, Open Redirect. Cada payload se detiene en el primer hallazgo por parámetro/input para máxima eficiencia.
+- **Manejo robusto de Ctrl+C**: Puedes interrumpir cualquier prueba (fuzzing, inyección, Nuclei, etc.) y se guardan los resultados encontrados hasta ese momento.
+- **Testing de APIs**: Descubrimiento de endpoints, pruebas de IDOR, Mass Assignment, errores verbose, análisis de tokens y autenticación.
+- **Enumeración y fuerza bruta**: Detección de usuarios, fuerza bruta de contraseñas (POST y Basic Auth), wordlists personalizables.
+- **Autenticación avanzada**: Login previo, testing de áreas restringidas, manejo de cookies/tokens, mantiene sesión en todos los tests.
+- **Integración con Nuclei**: Análisis de vulnerabilidades con plantillas Nuclei, resumen por severidad y template, integración directa en reportes.
+- **Reportes claros y completos**: Generación automática de reportes TXT, JSON y HTML (modo light/dark), con tablas dinámicas de tecnologías, directorios, endpoints, credenciales, etc. Los reportes se guardan en `/reports/<host>`.
+- **Tablas y visualización dinámica**: Tablas HTML adaptativas para tecnologías, directorios, endpoints, credenciales, etc. Siempre se muestran aunque no haya hallazgos.
+- **Experiencia de usuario mejorada**: Menú interactivo, mensajes coloridos, barras de progreso, control de errores elegante, mensajes claros y visibles.
+- **Configuración avanzada**: Personalización de wordlists, timeout, hilos, delay, uso de proxies, etc.
+- **Código limpio y modular**: Fácil de mantener y extender.
 
 ---
 
