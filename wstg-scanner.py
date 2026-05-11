@@ -458,65 +458,65 @@ def _build_html_report(report_data):
     spider = scan_data.get("spider", {})
     meta = scan_data.get("stats", {})
 
-        findings_items = "\n".join(
-                f"<li>{_html_escape(item)}</li>" for item in findings
-        ) or "<li>Sin hallazgos.</li>"
-        technologies_html = "<ul class='tech-list'>" + "\n".join(
-                f"<li><span class='tag'>{_html_escape(t)}</span></li>" for t in technologies
-        ) + "</ul>" if technologies else "<span class='muted'>No detectadas</span>"
-        users_html = "<ul class='user-list'>" + "\n".join(
-                f"<li><span class='tag'>{_html_escape(u)}</span></li>" for u in users
-        ) + "</ul>" if users else "<span class='muted'>Sin usuarios</span>"
-        emails_html = "<ul class='email-list'>" + "\n".join(
-                f"<li><span class='tag'>{_html_escape(e)}</span></li>" for e in emails
-        ) + "</ul>" if emails else "<span class='muted'>Sin emails</span>"
+    findings_items = "\n".join(
+        f"<li>{_html_escape(item)}</li>" for item in findings
+    ) or "<li>Sin hallazgos.</li>"
+    technologies_html = "<ul class='tech-list'>" + "\n".join(
+        f"<li><span class='tag'>{_html_escape(t)}</span></li>" for t in technologies
+    ) + "</ul>" if technologies else "<span class='muted'>No detectadas</span>"
+    users_html = "<ul class='user-list'>" + "\n".join(
+        f"<li><span class='tag'>{_html_escape(u)}</span></li>" for u in users
+    ) + "</ul>" if users else "<span class='muted'>Sin usuarios</span>"
+    emails_html = "<ul class='email-list'>" + "\n".join(
+        f"<li><span class='tag'>{_html_escape(e)}</span></li>" for e in emails
+    ) + "</ul>" if emails else "<span class='muted'>Sin emails</span>"
 
-        endpoint_rows = "\n".join(
-                "<tr>"
-                f"<td>{_html_escape(ep.get('status', ''))}</td>"
-                f"<td>{_html_escape(ep.get('endpoint', ''))}</td>"
-                f"<td>{_html_escape(ep.get('url', ''))}</td>"
-                f"<td>{_html_escape(ep.get('content_type', ''))}</td>"
-                "</tr>"
-                for ep in endpoints[:300]
-        ) or "<tr><td colspan='4'>Sin endpoints detectados.</td></tr>"
+    endpoint_rows = "\n".join(
+        "<tr>"
+        f"<td>{_html_escape(ep.get('status', ''))}</td>"
+        f"<td>{_html_escape(ep.get('endpoint', ''))}</td>"
+        f"<td>{_html_escape(ep.get('url', ''))}</td>"
+        f"<td>{_html_escape(ep.get('content_type', ''))}</td>"
+        "</tr>"
+        for ep in endpoints[:300]
+    ) or "<tr><td colspan='4'>Sin endpoints detectados.</td></tr>"
 
-        dir_rows = "\n".join(
-                "<tr>"
-                f"<td>{_html_escape(hit.get('status', ''))}</td>"
-                f"<td>{_html_escape(hit.get('url', ''))}</td>"
-                f"<td>{_html_escape(hit.get('size', ''))}</td>"
-                "</tr>"
-                for hit in dirs[:500]
-        ) or "<tr><td colspan='3'>Sin directorios encontrados.</td></tr>"
+    dir_rows = "\n".join(
+        "<tr>"
+        f"<td>{_html_escape(hit.get('status', ''))}</td>"
+        f"<td>{_html_escape(hit.get('url', ''))}</td>"
+        f"<td>{_html_escape(hit.get('size', ''))}</td>"
+        "</tr>"
+        for hit in dirs[:500]
+    ) or "<tr><td colspan='3'>Sin directorios encontrados.</td></tr>"
 
-        creds_rows = "\n".join(
-                "<tr>"
-                f"<td>{_html_escape(c.get('username', ''))}</td>"
-                f"<td>{_html_escape(c.get('password', ''))}</td>"
-                "</tr>"
-                for c in creds
-        ) or "<tr><td colspan='2'>Sin credenciales válidas detectadas.</td></tr>"
+    creds_rows = "\n".join(
+        "<tr>"
+        f"<td>{_html_escape(c.get('username', ''))}</td>"
+        f"<td>{_html_escape(c.get('password', ''))}</td>"
+        "</tr>"
+        for c in creds
+    ) or "<tr><td colspan='2'>Sin credenciales válidas detectadas.</td></tr>"
 
-        sample_urls_html = "\n".join(
-                f"<li>{_html_escape(u)}</li>" for u in spider.get("sample_urls", [])[:120]
-        ) or "<li>Sin URLs capturadas.</li>"
+    sample_urls_html = "\n".join(
+        f"<li>{_html_escape(u)}</li>" for u in spider.get("sample_urls", [])[:120]
+    ) or "<li>Sin URLs capturadas.</li>"
 
-        # Navegación por secciones
-        nav_sections = [
-                ("Resumen", "resumen"),
-                ("Información general", "info"),
-                ("Hallazgos", "hallazgos"),
-                ("API", "api"),
-                ("Directorios", "directorios"),
-                ("Credenciales", "credenciales"),
-                ("Spidering", "spidering"),
-        ]
-        nav_html = "<nav class='nav-pills'>" + "\n".join(
-                f"<a href='#{sec_id}' class='pill'>{sec_name}</a>" for sec_name, sec_id in nav_sections
-        ) + "</nav>"
+    # Navegación por secciones
+    nav_sections = [
+        ("Resumen", "resumen"),
+        ("Información general", "info"),
+        ("Hallazgos", "hallazgos"),
+        ("API", "api"),
+        ("Directorios", "directorios"),
+        ("Credenciales", "credenciales"),
+        ("Spidering", "spidering"),
+    ]
+    nav_html = "<nav class='nav-pills'>" + "\n".join(
+        f"<a href='#{sec_id}' class='pill'>{sec_name}</a>" for sec_name, sec_id in nav_sections
+    ) + "</nav>"
 
-        return f"""<!doctype html>
+    return f"""<!doctype html>
 <html lang=\"es\">
 <head>
     <meta charset=\"utf-8\">
