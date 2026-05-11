@@ -423,12 +423,14 @@ def _default_report_txt_name(target_url):
 
 def _normalize_output_paths(output_file, target_url):
     """Devuelve rutas estables para TXT/JSON/HTML. Siempre sobrescribe por objetivo."""
+    # Carpeta base de reportes
+    reports_dir = os.path.join(os.getcwd(), "reports")
+    # Nombre de subcarpeta por host/url
+    host_dir = _safe_filename_from_url(target_url)
+    out_dir = os.path.join(reports_dir, host_dir)
+    os.makedirs(out_dir, exist_ok=True)
     base_name = _default_report_txt_name(target_url)
-    if output_file:
-        out_dir = output_file if os.path.isdir(output_file) else os.path.dirname(output_file)
-        txt_file = os.path.join(out_dir, base_name) if out_dir else base_name
-    else:
-        txt_file = base_name
+    txt_file = os.path.join(out_dir, base_name)
     base, ext = os.path.splitext(txt_file)
     if not ext:
         txt_file = txt_file + ".txt"
