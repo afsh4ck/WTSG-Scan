@@ -182,6 +182,158 @@ def clear_screen():
 def check_ffuf():
     return shutil.which("ffuf") is not None
 
+def check_whatweb():
+    return shutil.which("whatweb") is not None
+
+def install_whatweb():
+    """Ofrece instalar WhatWeb via apt si no está disponible."""
+    print_warning("WhatWeb no está instalado.")
+    try:
+        resp = input("¿Instalar WhatWeb automáticamente? (requiere sudo) [s/N]: ").strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        return False
+    if resp != 's':
+        return False
+    try:
+        print_info("Ejecutando: sudo apt-get install -y whatweb")
+        ret = subprocess.run(
+            ["sudo", "apt-get", "install", "-y", "whatweb"],
+            check=True
+        )
+        if check_whatweb():
+            print_good("WhatWeb instalado correctamente.")
+            return True
+        else:
+            print_error("La instalación parece haber fallado.")
+            return False
+    except Exception as e:
+        print_error(f"No se pudo instalar WhatWeb: {e}")
+        return False
+
+def run_whatweb(target):
+    """Ejecuta WhatWeb y formatea su salida."""
+    if not check_whatweb():
+        if not install_whatweb():
+            return None
+
+    # Categorías de color
+    CATEGORY_COLOR = {
+        'cms':         Fore.MAGENTA,
+        'framework':   Fore.MAGENTA,
+        'language':    Fore.CYAN,
+        'server':      Fore.CYAN,
+        'javascript':  Fore.YELLOW,
+        'jquery':      Fore.YELLOW,
+        'analytics':   Fore.YELLOW,
+        'security':    Fore.GREEN,
+        'email':       Fore.WHITE,
+        'country':     Fore.WHITE,
+        'ip':          Fore.WHITE,
+        'title':       Fore.WHITE,
+        'httpserver':  Fore.CYAN,
+        'x-powered-by':Fore.CYAN,
+    }
+
+    try:
+        cmd = ["whatweb", "--color=never", "--log-brief=/dev/stdout", target]
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=30
+        )
+        raw = (result.stdout + result.stderr).strip()
+        if not raw:
+            print_warning("WhatWeb no devolvió resultados.")
+            return []
+
+        # WhatWeb brief format: URL [STATUS] Plugin1[val], Plugin2[val], ...
+        technologies = []
+        SEP = "─" * 60
+        print(f"\n{Fore.CYAN}{SEP}{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}  WHATWEB — Detección de tecnologías{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}{SEP}{Style.RESET_ALL}")
+
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # Extraer plugins de la línea
+            # Formato: http://host [200 OK] Plugin1, Plugin2[value], ...
+            bracket_match = re.match(r'^(https?://\S+)\s+\[([^\]]+)\]\s*(.*)', line)
+            if not bracket_match:
+                # Línea sin parsear → mostrar cruda
+                print(f"  {line}")
+                continue
+
+            url_part    = bracket_match.group(1)
+            status_part = bracket_match.group(2)
+            plugins_raw = bracket_match.group(3)
+
+            # Color del código HTTP
+            http_code = status_part.split()[0] if status_part else ''
+            if http_code.startswith('2'):
+                sc = Fore.GREEN
+            elif http_code.startswith('3'):
+                sc = Fore.CYAN
+            elif http_code.startswith('4'):
+                sc = Fore.YELLOW
+            elif http_code.startswith('5'):
+                sc = Fore.RED
+            else:
+                sc = Fore.WHITE
+
+            print(f"  {Fore.WHITE}{url_part}{Style.RESET_ALL}  "
+                  f"{sc}[{status_part}]{Style.RESET_ALL}")
+
+            if not plugins_raw:
+                continue
+
+            # Separar plugins respetando corchetes anidados
+            plugins = []
+            depth, start = 0, 0
+            for i, ch in enumerate(plugins_raw):
+                if ch == '[':
+                    depth += 1
+                elif ch == ']':
+                    depth -= 1
+                elif ch == ',' and depth == 0:
+                    p = plugins_raw[start:i].strip()
+                    if p:
+                        plugins.append(p)
+                    start = i + 1
+            tail = plugins_raw[start:].strip()
+            if tail:
+                plugins.append(tail)
+
+            for plugin in plugins:
+                # Separar nombre del valor entre corchetes
+                pm = re.match(r'^([A-Za-z0-9_\-\./ ]+?)(?:\[(.+)\])?$', plugin, re.DOTALL)
+                if pm:
+                    name = pm.group(1).strip()
+                    value = pm.group(2).strip() if pm.group(2) else ''
+                else:
+                    name, value = plugin.strip(), ''
+
+                technologies.append(name)
+                key = name.lower().replace(' ', '').replace('-', '')
+                color = next(
+                    (v for k, v in CATEGORY_COLOR.items() if k in key),
+                    Fore.WHITE
+                )
+                if value:
+                    print(f"    {color}▸ {name:<28}{Style.RESET_ALL}  "
+                          f"{Fore.WHITE}{value[:60]}{Style.RESET_ALL}")
+                else:
+                    print(f"    {color}▸ {name}{Style.RESET_ALL}")
+
+        print(f"{Fore.CYAN}{SEP}{Style.RESET_ALL}\n")
+        return list(set(technologies))
+
+    except subprocess.TimeoutExpired:
+        print_error("WhatWeb tardó demasiado (timeout 30s).")
+        return None
+    except Exception as e:
+        print_error(f"Error ejecutando WhatWeb: {e}")
+        return None
+
 def print_info(msg):
     print(f"{Fore.CYAN}[INFO]{Style.RESET_ALL} {msg}")
 
@@ -355,14 +507,25 @@ def gather_info(target, session):
         info['headers'] = dict(resp.headers)
         info['cookies'] = resp.cookies
         info['server'] = resp.headers.get('Server', 'No revelado')
-        tech = []
-        if 'Set-Cookie' in resp.headers and 'PHPSESSID' in resp.headers['Set-Cookie']:
-            tech.append('PHP')
-        if 'X-Powered-By' in resp.headers:
-            tech.append(resp.headers['X-Powered-By'])
-        if 'ASP.NET' in str(resp.headers):
-            tech.append('ASP.NET')
-        info['technologies'] = list(set(tech))
+
+        # Detección de tecnologías con WhatWeb
+        print_info("Detectando tecnologías con WhatWeb...")
+        ww_result = run_whatweb(target)
+        if ww_result is not None:
+            info['technologies'] = ww_result
+        else:
+            # Fallback: detección básica por cabeceras
+            tech = []
+            if 'Set-Cookie' in resp.headers and 'PHPSESSID' in resp.headers['Set-Cookie']:
+                tech.append('PHP')
+            if 'X-Powered-By' in resp.headers:
+                tech.append(resp.headers['X-Powered-By'])
+            if 'ASP.NET' in str(resp.headers):
+                tech.append('ASP.NET')
+            info['technologies'] = list(set(tech))
+            if info['technologies']:
+                print_info(f"Tecnologías (fallback): {', '.join(info['technologies'])}")
+
         return info
     except Exception as e:
         print_error(f"No se pudo obtener información: {e}")
@@ -1498,7 +1661,6 @@ def run_information_gathering(target, session):
     info = safe_execute(gather_info, target, session)
     if info:
         print_info(f"Servidor: {info['server']}")
-        print_info(f"Tecnologías: {', '.join(info['technologies'])}")
         safe_execute(check_robots_sitemap, target, session)
         safe_execute(check_http_methods, target, session)
         safe_execute(check_security_headers, info['headers'])
