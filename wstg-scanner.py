@@ -3,7 +3,7 @@
 
 """
 Web Security Testing (WSTG) Scanner - Interactive & Authenticated Edition
-Author: afsh4ck
+Author: IA + @afsh4ck (banner)
 Description: Full web spidering, directory fuzzing (ffuf with progress), injections, API tests, user enumeration & bruteforce.
 """
 
@@ -364,11 +364,11 @@ def dir_bruteforce(target, session, wordlist=None, threads=THREADS, use_ffuf=Tru
                             if new_progress != last_progress:
                                 last_progress = new_progress
                                 print_info(f"Progreso ffuf: {new_progress}")
-                    # Mostrar resultados de hallazgos
-                    if "Status:" in line:
-                        stripped = line.lstrip()
-                        if not stripped.startswith('#'):
-                            print_vuln(stripped.strip())
+                    # Mostrar resultados de hallazgos (líneas que contienen "Status:" y no son comentarios)
+                    # Además, filtrar líneas que empiecen por '#' después de espacios
+                    stripped_line = line.lstrip()
+                    if "Status:" in line and not stripped_line.startswith('#'):
+                        print_vuln(line.strip())
                 process.wait()
                 if process.returncode != 0 and process.returncode != 1:
                     print_error(f"ffuf terminó con código {process.returncode}")
@@ -695,6 +695,10 @@ def test_user_enumeration_form(target, session):
         print_error(f"Error en test de enumeración: {e}")
 
 def bruteforce_login(target, session, usernames, passlist, max_threads=5):
+    """
+    Detecta formularios de login y realiza fuerza bruta.
+    Muestra progreso y resultado final.
+    """
     try:
         if not usernames:
             usernames = ['admin', 'test']
@@ -766,17 +770,19 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
         total_combinations = len(usernames) * len(passwords)
         print_info(f"Iniciando bruteforce con {len(usernames)} usuarios y {len(passwords)} contraseñas (total {total_combinations} combinaciones)...")
         
+        found_credentials = []
+        
         def try_cred(user, pwd):
             for form in login_forms:
                 data = {form['user_field']: user, form['pass_field']: pwd}
                 try:
                     resp = session.post(form['url'], data=data, timeout=DEFAULT_TIMEOUT, allow_redirects=False)
                     if resp.status_code == 302 or "dashboard" in resp.url.lower() or "welcome" in resp.text.lower():
-                        print_vuln(f"Credenciales válidas: {user}:{pwd}")
+                        found_credentials.append((user, pwd))
                         return True
                     resp2 = session.post(form['url'], data=data, timeout=DEFAULT_TIMEOUT)
                     if "dashboard" in resp2.url.lower() or "welcome" in resp2.text.lower():
-                        print_vuln(f"Credenciales válidas (post-redirección): {user}:{pwd}")
+                        found_credentials.append((user, pwd))
                         return True
                 except:
                     pass
@@ -804,6 +810,13 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
                     if completed % 100 == 0 or completed == total_combinations:
                         print_info(f"Progreso bruteforce: {completed}/{total_combinations} combinaciones probadas")
                     future.result()
+        
+        if found_credentials:
+            print_good(f"Bruteforce completado. Credenciales encontradas: {len(found_credentials)}")
+            for user, pwd in found_credentials:
+                print_vuln(f"  {user}:{pwd}")
+        else:
+            print_info("Bruteforce completado. No se encontraron credenciales válidas.")
     except Exception as e:
         print_error(f"Error en bruteforce: {e}")
 
