@@ -14,20 +14,21 @@ import shlex
         for line in process.stdout:
             print(line, end='')
         process.wait()
-        # Intentar leer el JSON generado
-        try:
-            with open(json_path, "r", encoding="utf-8", errors="ignore") as f:
-                for l in f:
-                    try:
-                        data = json.loads(l)
-                        if isinstance(data, dict) and data.get('templateID'):
-                            findings.append(data)
-                    except Exception:
+        # Intentar leer el JSON generado (robusto)
+        findings = []
+        with open(json_path, "rb") as f:
+            for l in f:
+                try:
+                    l = l.decode("utf-8", errors="ignore").strip()
+                    if not l:
                         continue
-        except Exception as e:
-            print_warning(f"No se pudo leer el JSON de Nuclei, usando parseo de texto plano. Error: {e}")
-            # Fallback a texto plano si el JSON no existe o está vacío
-            findings = []
+                    data = json.loads(l)
+                    if isinstance(data, dict) and data.get('templateID'):
+                        findings.append(data)
+                except Exception:
+                    continue
+        # Si no hay findings, intentar fallback texto plano
+        if not findings:
             with open(json_path, "r", encoding="utf-8", errors="ignore") as f:
                 for line in f:
                     if line.startswith("["):
@@ -46,17 +47,28 @@ import shlex
         process.terminate()
         print_warning("Nuclei interrumpido por el usuario.")
         return []
+    except Exception as e:
+        print_error(f"Error ejecutando Nuclei: {e}")
+        return []
 
+    # Resumen visual en consola
     print_info(f"Total vulnerabilidades detectadas por Nuclei: {len(findings)}")
-    # Resumen agrupado por severidad y template
     summary = {}
     for f in findings:
         sev = f.get('info', {}).get('severity', f.get('severity', 'unknown'))
         tid = f.get('templateID', f.get('template', 'unknown'))
         summary.setdefault(sev, []).append(tid)
-    print("\nResumen de vulnerabilidades:")
-    for sev, tids in summary.items():
-        print(f"  {sev.upper()}: {len(tids)} hallazgos ({', '.join(sorted(set(tids)))})")
+    if findings:
+        print("\nResumen de vulnerabilidades por severidad:")
+        print("+------------+----------+-------------------------+")
+        print("| Severidad  | Cantidad | Templates únicos        |")
+        print("+------------+----------+-------------------------+")
+        for sev, tids in summary.items():
+            print(f"| {sev.upper():<10} | {len(tids):<8} | {', '.join(sorted(set(tids)))[:40]}{'...' if len(', '.join(sorted(set(tids))) )>40 else ''} |")
+        print("+------------+----------+-------------------------+")
+    else:
+        print("\nNo se detectaron vulnerabilidades con Nuclei.")
+
     # Acumular en SCAN_DATA
     if 'nuclei_findings' not in SCAN_DATA or not isinstance(SCAN_DATA['nuclei_findings'], list):
         SCAN_DATA['nuclei_findings'] = []
@@ -68,7 +80,6 @@ import shlex
     for sev, tids in summary.items():
         if sev not in SCAN_DATA['nuclei_summary']:
             SCAN_DATA['nuclei_summary'][sev] = []
-        # Añadir solo los nuevos templateID
         prev = set(SCAN_DATA['nuclei_summary'][sev])
         nuevos = [tid for tid in tids if tid not in prev]
         SCAN_DATA['nuclei_summary'][sev].extend(nuevos)
