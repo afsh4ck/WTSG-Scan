@@ -376,7 +376,15 @@ def run_whatweb(target):
                     print(f"    {color}▸ {name}{Style.RESET_ALL}")
 
         print(f"{Fore.CYAN}{SEP}{Style.RESET_ALL}\n")
-        return list(set(technologies))
+        # Eliminar duplicados por (name, detail)
+        seen = set()
+        unique_techs = []
+        for t in technologies:
+            key = (t['name'], t['detail'])
+            if key not in seen:
+                seen.add(key)
+                unique_techs.append(t)
+        return unique_techs
 
     except subprocess.TimeoutExpired:
         print_error("WhatWeb tardó demasiado (timeout 30s).")
@@ -449,7 +457,7 @@ def _build_html_report(report_data):
     """Genera reporte HTML con modo light/dark y secciones relevantes del escaneo."""
     scan_data = report_data.get("scan_data", {})
     findings = report_data.get("findings", [])
-    technologies = scan_data.get("general", {}).get("technologies", [])
+    technologies = scan_data.get("general", {}).get("technologies", []) or []
     users = scan_data.get("users", [])
     emails = scan_data.get("emails", [])
     endpoints = scan_data.get("api_endpoints", [])
@@ -461,15 +469,16 @@ def _build_html_report(report_data):
     findings_items = "\n".join(
         f"<li>{_html_escape(item)}</li>" for item in findings
     ) or "<li>Sin hallazgos.</li>"
-    if technologies and isinstance(technologies[0], dict):
-        technologies_html = "<table class='tech-list'><thead><tr><th>Tecnología</th><th>Detalle</th></tr></thead><tbody>"
-        for t in technologies:
-            technologies_html += f"<tr><td>{_html_escape(t.get('name',''))}</td><td>{_html_escape(t.get('detail',''))}</td></tr>"
-        technologies_html += "</tbody></table>"
-    elif technologies:
-        technologies_html = "<ul class='tech-list'>" + "\n".join(
-            f"<li><span class='tag'>{_html_escape(t)}</span></li>" for t in technologies
-        ) + "</ul>"
+    if technologies:
+        if isinstance(technologies[0], dict):
+            technologies_html = "<table class='tech-list'><thead><tr><th>Tecnología</th><th>Detalle</th></tr></thead><tbody>"
+            for t in technologies:
+                technologies_html += f"<tr><td>{_html_escape(t.get('name',''))}</td><td>{_html_escape(t.get('detail',''))}</td></tr>"
+            technologies_html += "</tbody></table>"
+        else:
+            technologies_html = "<ul class='tech-list'>" + "\n".join(
+                f"<li><span class='tag'>{_html_escape(str(t))}</span></li>" for t in technologies
+            ) + "</ul>"
     else:
         technologies_html = "<span class='muted'>No detectadas</span>"
     users_html = "<ul class='user-list'>" + "\n".join(
@@ -489,14 +498,27 @@ def _build_html_report(report_data):
         for ep in endpoints[:300]
     ) or "<tr><td colspan='4'>Sin endpoints detectados.</td></tr>"
 
-    dir_rows = "\n".join(
-        "<tr>"
-        f"<td>{_html_escape(hit.get('status', ''))}</td>"
-        f"<td>{_html_escape(hit.get('url', ''))}</td>"
-        f"<td>{_html_escape(hit.get('size', ''))}</td>"
-        "</tr>"
-        for hit in dirs[:500]
-    ) or "<tr><td colspan='3'>Sin directorios encontrados.</td></tr>"
+    dir_rows = ""
+    if dirs:
+        for hit in dirs[:500]:
+            if isinstance(hit, dict):
+                dir_rows += (
+                    "<tr>"
+                    f"<td>{_html_escape(hit.get('status', ''))}</td>"
+                    f"<td>{_html_escape(hit.get('url', ''))}</td>"
+                    f"<td>{_html_escape(hit.get('size', ''))}</td>"
+                    "</tr>"
+                )
+            else:
+                dir_rows += (
+                    "<tr>"
+                    f"<td></td>"
+                    f"<td>{_html_escape(str(hit))}</td>"
+                    f"<td></td>"
+                    "</tr>"
+                )
+    if not dir_rows:
+        dir_rows = "<tr><td colspan='3'>Sin directorios encontrados.</td></tr>"
 
     creds_rows = "\n".join(
         "<tr>"
@@ -2414,7 +2436,7 @@ def run_user_enum_bruteforce(target, session):
         print_good(f"Emails encontrados: {', '.join(emails)}")
     safe_execute(test_user_enumeration_form, target, session)
     want_brute = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Desea realizar fuerza bruta de contraseñas? (s/n): ").strip().lower()
-    if want_brute == 's':
+    if want_brute in ('', 's'):
         passlist = input_path("Ruta a wordlist de contraseñas (dejar vacío para usar por defecto de SecLists): ").strip()
         if not users:
             users_input = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Introduce usuarios separados por comas: ").strip()
