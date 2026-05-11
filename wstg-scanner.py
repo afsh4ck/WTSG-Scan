@@ -725,7 +725,15 @@ def save_report(output_file=None):
             f.write("[INFORMACIÓN GENERAL]\n")
             f.write(f"- Status: {general.get('status_code', 'N/A')}\n")
             f.write(f"- Servidor: {general.get('server', 'N/A')}\n")
-            f.write(f"- Tecnologías: {', '.join(general.get('technologies', [])) or 'N/A'}\n")
+            techs = general.get('technologies', [])
+            if techs:
+                if isinstance(techs[0], dict):
+                    tech_str = ', '.join(f"{t.get('name','')}{'['+t.get('detail','')+']' if t.get('detail') else ''}" for t in techs)
+                else:
+                    tech_str = ', '.join(str(t) for t in techs)
+            else:
+                tech_str = 'N/A'
+            f.write(f"- Tecnologías: {tech_str}\n")
             f.write(f"- Métodos HTTP: {', '.join(report_data['scan_data'].get('http_methods', [])) or 'N/A'}\n")
             f.write(f"- robots/sitemap: {', '.join(report_data['scan_data'].get('robots_paths', [])) or 'N/A'}\n\n")
 
