@@ -107,7 +107,7 @@ VERSION = "1.2.0"
 
 # ========== CONFIGURACIÓN ==========
 DEFAULT_TIMEOUT = 10
-MAX_REDIRECTS = 3
+MAX_REDIRECTS = 10
 THREADS = 5
 AUTHENTICATED = False
 AUTH_SESSION = None
@@ -1512,7 +1512,7 @@ def extract_forms_and_params(target, session):
         form_keys = set()
 
         print_info("Crawling para detectar formularios e inputs de forma exhaustiva...")
-        discovered_urls, spider_params, _ = spider_website(
+        discovered_urls, spider_params, spider_forms = spider_website(
             target,
             session,
             max_pages=250,
@@ -1521,25 +1521,25 @@ def extract_forms_and_params(target, session):
         )
 
         params.update(spider_params or set())
-        for page_url in sorted(discovered_urls):
-            page_forms, page_params = _extract_from_single_page(page_url)
-            params.update(page_params)
-            for f in page_forms:
-                action_url = urljoin(f['page_url'], f.get('action') or f['page_url'])
-                key = (
-                    action_url,
-                    f.get('method', 'GET').upper(),
-                    tuple(sorted(set(f.get('inputs', []))))
-                )
-                if key in form_keys:
-                    continue
-                form_keys.add(key)
-                forms.append({
-                    'page_url': f['page_url'],
-                    'action': action_url,
-                    'method': f.get('method', 'GET').upper(),
-                    'inputs': sorted(set(f.get('inputs', [])))
-                })
+
+        # Reutilizar los formularios ya detectados por el spider (con inputs)
+        for f in spider_forms or []:
+            action_url = f.get('action') or f.get('url') or f.get('page_url') or target
+            method = (f.get('method') or 'GET').upper()
+            inputs = sorted(set(f.get('inputs', [])))
+            if not inputs:
+                continue
+            key = (action_url, method, tuple(inputs))
+            if key in form_keys:
+                continue
+            form_keys.add(key)
+            forms.append({
+                'page_url': f.get('page_url', action_url),
+                'action': action_url,
+                'method': method,
+                'inputs': inputs,
+            })
+
         print_info(f"Formularios encontrados: {len(forms)}")
         print_info(f"Parámetros únicos en enlaces: {len(params)}")
         return forms, list(params)
@@ -2549,6 +2549,7 @@ def spider_website(target, session, max_pages=500, max_depth=3, use_robots=True)
     discovered_urls = set()
     all_params = set()
     forms_found = []
+    form_keys_seen = set()
     discovered_urls.add(target)
     
     with tqdm(total=max_pages, desc="Spidering", unit="pág", ncols=80, disable=not HAS_TQDM) as pbar:
@@ -2567,7 +2568,14 @@ def spider_website(target, session, max_pages=500, max_depth=3, use_robots=True)
                     print_info(f"Spidering progreso: {len(visited)} páginas visitadas, {len(discovered_urls)} URLs descubiertas")
             
             try:
-                resp = session.get(current_url, timeout=DEFAULT_TIMEOUT)
+                try:
+                    resp = session.get(current_url, timeout=DEFAULT_TIMEOUT)
+                except requests.exceptions.TooManyRedirects:
+                    # Reintentar sin seguir redirecciones para capturar el destino
+                    try:
+                        resp = session.get(current_url, timeout=DEFAULT_TIMEOUT, allow_redirects=False)
+                    except Exception:
+                        continue
                 if resp.status_code != 200:
                     continue
                 content_type = resp.headers.get('Content-Type', '')
@@ -2595,20 +2603,44 @@ def spider_website(target, session, max_pages=500, max_depth=3, use_robots=True)
                     for form in soup.find_all('form'):
                         action = form.get('action', '')
                         method = form.get('method', 'get').upper()
+                        form_action_url = urljoin(current_url, action) if action else current_url
                         if action:
-                            form_url = urljoin(current_url, action)
-                            parsed_f = urlparse(form_url)
+                            parsed_f = urlparse(form_action_url)
                             if parsed_f.netloc == base_domain:
                                 clean_f = parsed_f._replace(fragment='')
                                 f_url = urlunparse(clean_f)
                                 if f_url not in discovered_urls:
                                     discovered_urls.add(f_url)
                                     urls_queue.append((f_url, depth+1))
-                        for inp in form.find_all(['input', 'textarea']):
+                        # Extraer inputs útiles (excluyendo submit/button/etc.)
+                        form_inputs = []
+                        for inp in form.find_all(['input', 'textarea', 'select']):
                             name = inp.get('name')
-                            if name:
-                                all_params.add(name)
-                        forms_found.append({'url': current_url, 'action': action, 'method': method})
+                            if not name:
+                                continue
+                            itype = (inp.get('type') or '').lower()
+                            if itype in ('submit', 'button', 'image', 'reset', 'file'):
+                                continue
+                            form_inputs.append(name)
+                            all_params.add(name)
+                        if not form_inputs:
+                            continue
+                        # Deduplicar por (action_url, method, tupla de inputs ordenados)
+                        form_key = (
+                            form_action_url,
+                            method,
+                            tuple(sorted(set(form_inputs)))
+                        )
+                        if form_key in form_keys_seen:
+                            continue
+                        form_keys_seen.add(form_key)
+                        forms_found.append({
+                            'page_url': current_url,
+                            'url': form_action_url,
+                            'action': form_action_url,
+                            'method': method,
+                            'inputs': sorted(set(form_inputs)),
+                        })
                     
                     for u in list(discovered_urls):
                         parsed_u = urlparse(u)
