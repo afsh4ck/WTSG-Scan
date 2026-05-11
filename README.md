@@ -15,7 +15,7 @@
 
 ---
 
-<img width="1644" height="1113" alt="Demo" src="https://github.com/user-attachments/assets/ddc5328f-923c-4111-abc9-39351fa0fc40" />
+<img width="1855" height="1019" alt="image" src="https://github.com/user-attachments/assets/c6e2449a-a8c6-44c9-a306-56684d2a5239" />
 
 
 ## 📋 Tabla de Contenidos
