@@ -1422,58 +1422,107 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
         found_credentials = set()  # Usar set para evitar duplicados
 
         # ── Calibración basal ─────────────────────────────────────────────────
-        # Enviamos credenciales imposibles para obtener la respuesta de FALLO
-        # y comparar diferencialmente cada intento real contra ella.
+        # Enviamos 3 requests con credenciales imposibles para establecer el
+        # rango normal de la página de error (páginas dinámicas varían en size).
         _IMPOSSIBLE_USER = "__wstg_x7z9q__"
         _IMPOSSIBLE_PASS = "__wstg_x7z9q__"
 
-        class Baseline:
-            status: int = -1
-            final_url: str = ""
-            body_len: int = 0
-            body_hash: str = ""
-
         import hashlib
 
-        baselines: list[Baseline] = []
+        # Palabras clave de sesión activa que NO deberían aparecer en login fallido
+        _SUCCESS_KEYWORDS = [
+            'logout', 'log out', 'sign out', 'cerrar sesión', 'cerrar sesion',
+            'salir', 'dashboard', 'panel', 'bienvenido', 'welcome', 'mi cuenta',
+            'my account', 'profile', 'perfil',
+        ]
+        # Palabras de error que SÍ aparecen en fallos y NO deben aparecer en éxito
+        _FAILURE_KEYWORDS = [
+            'invalid', 'incorrect', 'wrong', 'failed', 'error', 'inválido',
+            'incorrecto', 'contraseña incorrecta', 'usuario no encontrado',
+            'bad credentials', 'authentication failed', 'login failed',
+        ]
+
+        class Baseline:
+            def __init__(self):
+                self.status      = -1
+                self.final_path  = ""   # solo el PATH de la URL, sin query
+                self.len_min     = 0
+                self.len_max     = 0
+                self.has_success_kw  = False
+                self.has_failure_kw  = False
+
+        baselines = []
         for form in login_forms:
             bl = Baseline()
-            try:
-                r = session.post(
-                    form['url'],
-                    data={form['user_field']: _IMPOSSIBLE_USER, form['pass_field']: _IMPOSSIBLE_PASS},
-                    timeout=DEFAULT_TIMEOUT, allow_redirects=True
-                )
-                bl.status    = r.status_code
-                bl.final_url = r.url
-                bl.body_len  = len(r.content)
-                bl.body_hash = hashlib.md5(r.content).hexdigest()
-                print_info(f"Baseline calibrado para {form['url']}: "
-                           f"status={bl.status} len={bl.body_len} url={bl.final_url}")
-            except Exception as e:
-                print_warning(f"No se pudo calibrar baseline para {form['url']}: {e}")
+            lens = []
+            for _ in range(3):
+                try:
+                    r = session.post(
+                        form['url'],
+                        data={form['user_field']: _IMPOSSIBLE_USER,
+                              form['pass_field']: _IMPOSSIBLE_PASS},
+                        timeout=DEFAULT_TIMEOUT, allow_redirects=True
+                    )
+                    if bl.status == -1:
+                        bl.status     = r.status_code
+                        bl.final_path = urlparse(r.url).path.rstrip('/') or '/'
+                        body_lower    = r.text.lower()
+                        bl.has_success_kw = any(k in body_lower for k in _SUCCESS_KEYWORDS)
+                        bl.has_failure_kw = any(k in body_lower for k in _FAILURE_KEYWORDS)
+                    lens.append(len(r.content))
+                except Exception:
+                    pass
+            if lens:
+                bl.len_min = min(lens)
+                bl.len_max = max(lens)
+                # Ampliar margen un 20 % para absorber variación dinámica normal
+                margin = max(int((bl.len_max - bl.len_min) * 0.2), 200)
+                bl.len_min = max(0, bl.len_min - margin)
+                bl.len_max = bl.len_max + margin
+            print_info(f"Baseline [{form['url']}]: status={bl.status} "
+                       f"path={bl.final_path} len=[{bl.len_min},{bl.len_max}]")
             baselines.append(bl)
 
-        def is_successful_login(resp: "requests.Response", bl: "Baseline") -> bool:
-            """Detecta login exitoso por comparación diferencial contra el baseline de fallo."""
-            # 1. Código de respuesta diferente al baseline (ej: 302 vs 200)
-            if bl.status != -1 and resp.status_code != bl.status:
-                return True
-            # 2. URL final diferente al baseline (la app redirige a otro sitio)
-            if bl.final_url and resp.url != bl.final_url:
-                return True
-            # 3. Tamaño de cuerpo significativamente distinto (>15 % y >150 bytes)
-            if bl.body_len > 0:
-                diff = abs(len(resp.content) - bl.body_len)
-                ratio = diff / bl.body_len
-                if ratio > 0.15 and diff > 150:
-                    return True
-            # 4. Hash distinto Y tamaño diferente (descarta páginas dinámicas con tokens)
-            if bl.body_hash:
-                curr_hash = hashlib.md5(resp.content).hexdigest()
-                if curr_hash != bl.body_hash and abs(len(resp.content) - bl.body_len) > 150:
-                    return True
-            return False
+        def is_successful_login(resp, bl):
+            """
+            Detecta login exitoso con baja tasa de falsos positivos.
+            Requiere al menos UNA señal FUERTE o DOS señales MEDIAS.
+            """
+            body_lower = resp.text.lower()
+            curr_path  = urlparse(resp.url).path.rstrip('/') or '/'
+            curr_len   = len(resp.content)
+
+            strong = 0
+            medium = 0
+
+            # ── Señales FUERTES ───────────────────────────────────────────────
+            # A) El path de la URL cambió a algo distinto del baseline
+            #    (ej: /login → /dashboard). Ignoramos solo diferencia de query.
+            if bl.final_path and curr_path != bl.final_path:
+                strong += 1
+
+            # B) La app redirigió (3xx) cuando antes devolvía 200
+            if bl.status == 200 and resp.status_code in (301, 302, 303, 307, 308):
+                strong += 1
+
+            # ── Señales MEDIAS ────────────────────────────────────────────────
+            # C) El body contiene palabras de sesión activa que NO estaban en baseline
+            has_success = any(k in body_lower for k in _SUCCESS_KEYWORDS)
+            if has_success and not bl.has_success_kw:
+                medium += 1
+
+            # D) El body ya NO contiene las palabras de error que sí estaban en baseline
+            has_failure = any(k in body_lower for k in _FAILURE_KEYWORDS)
+            if bl.has_failure_kw and not has_failure:
+                medium += 1
+
+            # E) Tamaño del body está FUERA del rango calibrado de error
+            #    (umbral muy conservador para evitar falsos positivos con CSRF)
+            if bl.len_max > 0 and (curr_len < bl.len_min or curr_len > bl.len_max):
+                medium += 1
+
+            return strong >= 1 or medium >= 2
+
 
         def try_cred(user, pwd, form, bl):
             try:
