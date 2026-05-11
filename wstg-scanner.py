@@ -27,6 +27,14 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.robotparser import RobotFileParser
 
+# Activa edición de línea (backspace, flechas, historial) en todos los input()
+# Solo disponible en Unix/Linux/macOS; en Windows no es necesario.
+try:
+    import readline
+    readline.set_history_length(100)
+except ImportError:
+    pass
+
 import requests
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 
