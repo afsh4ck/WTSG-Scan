@@ -396,7 +396,7 @@ Unauthorized access to computer systems is illegal."
 
 ---
 
-## 🚀 Funcionalidades Destacadas (2026)
+## 🚀 Funcionalidades
 
 - **Reconocimiento avanzado**: Spidering, detección de tecnologías (WhatWeb), análisis de headers, cookies y métodos HTTP.
 - **Fuzzing de directorios**: Integración con ffuf (opcional) y método interno, con guardado automático y parcial de resultados en caso de interrupción.
