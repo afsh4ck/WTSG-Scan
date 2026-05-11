@@ -2009,28 +2009,38 @@ def discover_api_endpoints(target, session):
             if item:
                 found.append(item)
 
-        # Fuzzing recursivo: bajo cada prefijo activo, probar recursos típicos
-        active_prefixes = []
-        for prefix in API_BASE_PREFIXES:
-            url = urljoin(target, prefix)
-            try:
-                resp = session.get(url, timeout=DEFAULT_TIMEOUT, allow_redirects=False)
-                if resp.status_code in INTERESTING:
-                    active_prefixes.append(prefix)
-            except Exception:
-                continue
+        # Fuzzing recursivo bajo prefijos típicos de API. Lo hacemos siempre
+        # (no solo si la raíz del prefijo responde) porque muchas apps devuelven
+        # 404 en /api/v1 pero sí exponen /api/v1/users, /api/v1/login, etc.
+        prefixes_to_fuzz = list(API_BASE_PREFIXES)
 
-        if active_prefixes:
-            print_info(
-                f"Prefijos de API activos detectados: {', '.join(active_prefixes)}. "
-                f"Fuzzeando {len(API_RESOURCES)} recursos comunes bajo cada uno..."
-            )
-            for prefix in active_prefixes:
-                for resource in API_RESOURCES:
-                    endpoint = f"{prefix.rstrip('/')}/{resource}"
-                    item = _probe(endpoint, depth_label="↳ ")
-                    if item:
-                        found.append(item)
+        # Derivar prefijos adicionales desde endpoints ya encontrados o
+        # documentados (p. ej. /api/users → añade /api y /api/v1)
+        for item in list(found):
+            ep = item.get('endpoint', '')
+            if not ep or not ep.startswith('/'):
+                continue
+            parts = [p for p in ep.split('/') if p]
+            for i in range(1, len(parts)):
+                candidate = '/' + '/'.join(parts[:i])
+                if candidate not in prefixes_to_fuzz:
+                    prefixes_to_fuzz.append(candidate)
+
+        # Deduplicar manteniendo orden
+        seen_pref = set()
+        prefixes_to_fuzz = [p for p in prefixes_to_fuzz if not (p in seen_pref or seen_pref.add(p))]
+
+        print_info(
+            f"Fuzzing recursivo: {len(API_RESOURCES)} recursos × "
+            f"{len(prefixes_to_fuzz)} prefijos ({', '.join(prefixes_to_fuzz[:8])}"
+            f"{', ...' if len(prefixes_to_fuzz) > 8 else ''})"
+        )
+        for prefix in prefixes_to_fuzz:
+            for resource in API_RESOURCES:
+                endpoint = f"{prefix.rstrip('/')}/{resource}"
+                item = _probe(endpoint, depth_label="↳ ")
+                if item:
+                    found.append(item)
 
         print_info(f"Total endpoints API encontrados/accesibles: {len(found)}")
         if found:
