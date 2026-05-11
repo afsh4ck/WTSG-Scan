@@ -9,6 +9,7 @@ Description: Full web spidering, directory fuzzing (ffuf with progress), injecti
 """
 
 import argparse
+import getpass
 import re
 import sys
 import ssl
@@ -63,6 +64,7 @@ BANNER = r"""
 """
 DESCRIPTION = "OWASP Web Security Testing Scanner"
 DEVELOPER = "developed by @afsh4ck"
+VERSION = "1.2.0"
 
 # ========== CONFIGURACIÓN ==========
 DEFAULT_TIMEOUT = 10
@@ -71,12 +73,18 @@ THREADS = 5
 AUTHENTICATED = False
 AUTH_SESSION = None
 TARGET_URL = ""
+REQUEST_DELAY = 0.0  # Delay entre requests (segundos)
+OUTPUT_FILE = None   # Ruta del archivo de reporte
+FINDINGS = []        # Hallazgos acumulados para el reporte
 
 COMMON_DIRS = [
     "admin", "backup", "cgi-bin", "css", "js", "images", "uploads", "download",
     "include", "inc", "config", "api", "v1", "old", "test", "dev", "hidden",
-    "robots.txt", "sitemap.xml", ".git/HEAD", ".env", "phpinfo.php", "info.php",
-    "backup.zip", "backup.sql", "wp-admin", "wp-content", "administrator"
+    "robots.txt", "sitemap.xml", ".git/HEAD", ".git/config", ".env", ".env.backup",
+    "phpinfo.php", "info.php", "backup.zip", "backup.sql", "dump.sql",
+    "wp-admin", "wp-content", "administrator", "phpmyadmin", "adminer.php",
+    ".htaccess", ".htpasswd", "web.config", "crossdomain.xml", "clientaccesspolicy.xml",
+    ".well-known/security.txt", "package.json", "composer.json", "server-status"
 ]
 
 SECLISTS_SMALL = "/usr/share/seclists/Discovery/Web-Content/directory-list-2.3-small.txt"
@@ -145,7 +153,36 @@ def print_error(msg):
     print(f"{Fore.RED}[-]{Style.RESET_ALL} {msg}")
 
 def print_vuln(msg):
+    FINDINGS.append(f"[VULN] {msg}")
     print(f"{Fore.MAGENTA}[VULN]{Style.RESET_ALL} {msg}")
+
+def save_report(output_file=None):
+    """Guarda hallazgos en TXT y JSON."""
+    if not FINDINGS:
+        print_info("No se registraron vulnerabilidades en esta sesión.")
+        return
+    if not output_file:
+        output_file = f"wstg_report_{int(time.time())}.txt"
+    try:
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(f"WSTG Scanner v{VERSION} - Reporte de Vulnerabilidades\n")
+            f.write(f"Objetivo : {TARGET_URL}\n")
+            f.write(f"Fecha    : {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write("=" * 60 + "\n\n")
+            for finding in FINDINGS:
+                f.write(finding + "\n")
+        json_file = output_file.rsplit('.', 1)[0] + '.json'
+        with open(json_file, 'w', encoding='utf-8') as f:
+            json.dump({
+                "tool": f"WSTG Scanner v{VERSION}",
+                "target": TARGET_URL,
+                "date": time.strftime('%Y-%m-%d %H:%M:%S'),
+                "total_findings": len(FINDINGS),
+                "findings": FINDINGS
+            }, f, indent=2, ensure_ascii=False)
+        print_good(f"Reporte guardado: {output_file} y {json_file} ({len(FINDINGS)} hallazgos)")
+    except Exception as e:
+        print_error(f"No se pudo guardar el reporte: {e}")
 
 def normalize_url(url):
     if not url.startswith(('http://', 'https://')):
@@ -200,7 +237,7 @@ def setup_authentication():
     else:
         login_url = normalize_url(login_url)
     username = input("Usuario: ")
-    password = input("Contraseña: ")
+    password = getpass.getpass("Contraseña: ")
 
     temp_session = get_session()
     try:
@@ -396,10 +433,12 @@ def dir_bruteforce(target, session, wordlist=None, threads=THREADS, use_ffuf=Tru
             def test_path(path):
                 url = urljoin(target, path)
                 try:
+                    if REQUEST_DELAY > 0:
+                        time.sleep(REQUEST_DELAY)
                     resp = session.get(url, timeout=DEFAULT_TIMEOUT)
                     if resp.status_code < 400:
                         return (url, resp.status_code, len(resp.content))
-                except:
+                except Exception:
                     pass
                 return None
 
@@ -615,8 +654,8 @@ def check_ssl_tls(target):
                 cert = ssock.getpeercert()
                 print_info(f"Certificado para: {cert.get('subject')}")
                 version = ssock.version()
-                if version and version < 'TLSv1.2':
-                    print_warning(f"Protocolo TLS antiguo: {version}")
+                if version and version not in ('TLSv1.2', 'TLSv1.3'):
+                    print_warning(f"Protocolo TLS inseguro: {version}")
                 else:
                     print_good(f"Protocolo TLS: {version}")
     except Exception as e:
@@ -802,6 +841,8 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
             for form in login_forms:
                 data = {form['user_field']: user, form['pass_field']: pwd}
                 try:
+                    if REQUEST_DELAY > 0:
+                        time.sleep(REQUEST_DELAY)
                     # Primero con allow_redirects=False para capturar redirecciones
                     resp = session.post(form['url'], data=data, timeout=DEFAULT_TIMEOUT, allow_redirects=False)
                     if is_successful_login(resp, form['url']):
@@ -1013,15 +1054,17 @@ def show_menu():
     clear_screen()
     if HAS_COLOR:
         print(Fore.CYAN + BANNER + Style.RESET_ALL)
-	print(Fore.CYAN + DESCRIPTION + Style.RESET_ALL)
-	print(Fore.GREEN + DEVELOPER + Style.RESET_ALL + "\n")
+        print(Fore.CYAN + DESCRIPTION + Style.RESET_ALL)
+        print(Fore.GREEN + DEVELOPER + Style.RESET_ALL + "\n")
     else:
         print(DESCRIPTION)
         print(BANNER)
         print(DEVELOPER + "\n")
-    print("="*50)
-    print("  MENÚ PRINCIPAL - WSTG SCANNER")
-    print("="*50)
+    auth_status = (f"{Fore.GREEN}[Autenticado]{Style.RESET_ALL}" if AUTHENTICATED
+                   else f"{Fore.YELLOW}[Sin autenticación]{Style.RESET_ALL}")
+    print("=" * 52)
+    print(f"  WSTG SCANNER v{VERSION}  {auth_status}")
+    print("=" * 52)
     print(" 1. Información general y enumeración")
     print(" 2. Fuzzing de directorios (usa ffuf si está instalado)")
     print(" 3. Pruebas de inyección (SQLi, XSS, Path Traversal, Command Injection)")
@@ -1157,20 +1200,54 @@ def run_full_pentest(target, session):
     print_good("Pentesting completo finalizado.")
 
 def main():
-    global TARGET_URL, AUTHENTICATED, AUTH_SESSION
+    global TARGET_URL, AUTHENTICATED, AUTH_SESSION, THREADS, DEFAULT_TIMEOUT, REQUEST_DELAY, OUTPUT_FILE
+
+    parser = argparse.ArgumentParser(
+        description=f"WSTG Scanner v{VERSION} - OWASP Web Security Testing Scanner",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Ejemplo: python3 wstg-scanner.py --url https://example.com --output report.txt"
+    )
+    parser.add_argument('--url', '-u', metavar='URL',
+                        help='URL objetivo (omitir para modo interactivo)')
+    parser.add_argument('--output', '-o', metavar='FILE',
+                        help='Archivo de salida para el reporte (ej: report.txt)')
+    parser.add_argument('--threads', '-t', type=int, default=THREADS, metavar='N',
+                        help=f'Número de hilos (default: {THREADS})')
+    parser.add_argument('--timeout', type=int, default=DEFAULT_TIMEOUT, metavar='S',
+                        help=f'Timeout por request en segundos (default: {DEFAULT_TIMEOUT})')
+    parser.add_argument('--delay', '-d', type=float, default=0.0, metavar='S',
+                        help='Delay entre requests en segundos para evasión (default: 0)')
+    parser.add_argument('--no-color', action='store_true',
+                        help='Desactivar colores en la salida')
+    parser.add_argument('--version', '-V', action='version', version=f'WSTG Scanner v{VERSION}')
+    args = parser.parse_args()
+
+    THREADS = args.threads
+    DEFAULT_TIMEOUT = args.timeout
+    REQUEST_DELAY = args.delay
+    OUTPUT_FILE = args.output
+
+    if args.no_color:
+        global HAS_COLOR
+        HAS_COLOR = False
+
     clear_screen()
     if HAS_COLOR:
-        print(Fore.CYAN + DESCRIPTION + Style.RESET_ALL)
         print(Fore.CYAN + BANNER + Style.RESET_ALL)
+        print(Fore.CYAN + DESCRIPTION + Style.RESET_ALL)
         print(Fore.GREEN + DEVELOPER + Style.RESET_ALL + "\n")
     else:
-        print(DESCRIPTION)
         print(BANNER)
+        print(DESCRIPTION)
         print(DEVELOPER + "\n")
-    
-    TARGET_URL = input("Introduce la URL objetivo: ").strip()
-    TARGET_URL = normalize_url(TARGET_URL)
-    print_info(f"Objetivo: {TARGET_URL}")
+
+    if args.url:
+        TARGET_URL = normalize_url(args.url)
+        print_info(f"Objetivo: {TARGET_URL}")
+    else:
+        TARGET_URL = input("Introduce la URL objetivo: ").strip()
+        TARGET_URL = normalize_url(TARGET_URL)
+        print_info(f"Objetivo: {TARGET_URL}")
 
     session = get_session()
 
@@ -1210,9 +1287,18 @@ def main():
             break
         except Exception as e:
             print_error(f"Error inesperado: {e}")
-        
+
         input("\nPresiona Enter para continuar...")
-    
+
+    if FINDINGS:
+        auto_save = OUTPUT_FILE is not None
+        if not auto_save:
+            auto_save = input(
+                f"\n¿Guardar reporte con {len(FINDINGS)} hallazgos? [S/n]: "
+            ).strip().lower() != 'n'
+        if auto_save:
+            save_report(OUTPUT_FILE)
+
     print("\n" + Fore.GREEN + "Happy Hacking :)" + Style.RESET_ALL)
     sys.exit(0)
 

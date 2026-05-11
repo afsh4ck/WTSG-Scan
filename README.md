@@ -1,102 +1,407 @@
-# OWASP WSTG Security Scanner
+# 🔐 OWASP WSTG Security Scanner
+
+<div align="center">
 
 ![Python](https://img.shields.io/badge/Python-3.6+-blue.svg)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
+![Status](https://img.shields.io/badge/Status-Active-brightgreen.svg)
+![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)
 
-Herramienta interactiva de pruebas de seguridad web basada en la metodología **OWASP Web Security Testing Guide (WSTG)**. Realiza enumeración, fuzzing, pruebas de inyección (SQLi, XSS, Command Injection), spidering, detección de API, enumeración de usuarios y fuerza bruta de contraseñas.
+**Herramienta interactiva y completa de pruebas de seguridad web** basada en la metodología OWASP WSTG.
 
-<img width="1644" height="1113" alt="image" src="https://github.com/user-attachments/assets/ddc5328f-923c-4111-abc9-39351fa0fc40" />
+[Características](#-características) • [Instalación](#-instalación) • [Uso](#-uso) • [Ejemplos](#-ejemplos) • [Contribuir](#-contribuciones)
 
-## Características
+</div>
 
-- **Spidering completo** – Mapeo de toda la aplicación (enlaces, formularios) respetando `robots.txt`.
-- **Fuzzing de directorios** – Usa `ffuf` si está instalado (rápido) o método interno con barra de progreso.
-- **Pruebas de inyección**:
-  - SQLi (error‑based, time‑based, boolean blind)
-  - XSS (reflejado y contextual)
-  - Path Traversal / LFI
-  - Command Injection
-  - Open Redirect
-- **Pruebas de API**:
-  - Descubrimiento de endpoints (`/api`, `/swagger`, etc.)
-  - IDOR (modificación de IDs)
-  - Mass Assignment
-  - Errores verbose
-- **Enumeración**:
-  - Cabeceras de seguridad, cookies, métodos HTTP
-  - Tecnologías (PHP, ASP.NET, etc.)
-  - Emails y usuarios (desde APIs o endpoints comunes)
-  - Enumeración de usuarios por diferencia en formularios de login
-- **Fuerza bruta de contraseñas** – Con wordlist personalizada o por defecto (SecLists). Soporta formularios POST y Basic Auth.
-- **Autenticación previa** – Login con credenciales para probar áreas restringidas.
-- **Interfaz interactiva** – Menú principal con colores y barras de progreso.
-- **Control de errores** – Captura `Ctrl+C` y muestra mensaje `Happy Hacking :)`.
+---
 
-## Requisitos
+<img width="1644" height="1113" alt="Demo" src="https://github.com/user-attachments/assets/ddc5328f-923c-4111-abc9-39351fa0fc40" />
 
-- Python 3.6 o superior
-- Opcional: `ffuf` instalado en el sistema para fuzzing ultra rápido.
-- Opcional: SecLists (se puede instalar automáticamente desde el script con `sudo`).
 
-## Instalación
+## 📋 Tabla de Contenidos
 
-1. Clona el repositorio:
-   ```bash
-   git clone https://github.com/tuusuario/wstg-scanner.git
-   cd wstg-scanner```
-Instala las dependencias Python:
+- [Descripción](#-descripción)
+- [Características](#-características)
+- [Requisitos Previos](#-requisitos-previos)
+- [Instalación](#-instalación)
+- [Uso Rápido](#-uso-rápido)
+- [Menú Principal](#-menú-principal)
+- [Ejemplos de Uso](#-ejemplos-de-uso)
+- [Configuración Avanzada](#-configuración-avanzada)
+- [Contribuciones](#-contribuciones)
+- [Licencia](#-licencia)
+- [Disclaimer](#-⚠️-disclaimer)
+
+---
+
+## 📝 Descripción
+
+**WSTG Scanner** es una herramienta de pentesting web **interactiva y comprehensive** que implementa las mejores prácticas del [OWASP Web Security Testing Guide](https://owasp.org/www-project-web-security-testing-guide/). 
+
+Diseñada para security researchers y pentesters, automatiza tareas comunes de reconocimiento y testing como:
+- 🕷️ Mapeo completo de aplicaciones web
+- 🔍 Fuzzing de directorios y endpoints
+- 💉 Pruebas de inyección avanzadas
+- 🔌 Detección y testing de APIs
+- 👤 Enumeración de usuarios
+- 🔐 Ataques de fuerza bruta
+
+---
+
+## ⭐ Características
+
+### 🔎 Reconocimiento
+- **Spidering completo** – Mapeo exhaustivo de la aplicación (enlaces, formularios, parámetros)
+- **Respeto a robots.txt** – Escaneo responsable de aplicaciones
+- **Detección de tecnologías** – Identifica servidores, frameworks y versiones
+
+### 🔀 Fuzzing & Enumeración
+- **Fuzzing de directorios** – Integración con `ffuf` (ultra-rápido) o método interno con progreso visual
+- **Enumeración de cabeceras** – Análisis de headers de seguridad
+- **Descubrimiento de cookies** – Análisis de seguridad en cookies
+- **Detección de métodos HTTP** – Identifica métodos permitidos
+
+### 💉 Pruebas de Inyección
+- **SQLi (SQL Injection)**
+  - Error-based detection
+  - Time-based blind SQLi
+  - Boolean-based blind SQLi
+- **XSS (Cross-Site Scripting)**
+  - XSS reflejado
+  - Análisis contextual
+- **Path Traversal / LFI** – Acceso a archivos del sistema
+- **Command Injection** – Ejecución de comandos
+- **Open Redirect** – Detección de redireccionamientos maliciosos
+
+### 🔌 Testing de APIs
+- **Descubrimiento de endpoints** – Busca `/api`, `/swagger`, `/graphql`, etc.
+- **IDOR (Insecure Direct Object Reference)** – Modificación de IDs
+- **Mass Assignment** – Inyección de parámetros
+- **Errores verbose** – Detección de información sensible en errores
+- **Token analysis** – Análisis de tokens y autenticación
+
+### 👥 Enumeración & Fuerza Bruta
+- **Enumeración de usuarios** – Desde APIs, endpoints comunes y diferencia en respuestas
+- **Fuerza bruta de contraseñas** – Soporta POST forms y Basic Auth
+- **Wordlists personalizables** – Compatible con SecLists
+- **Control de velocidad** – Throttling configurable
+
+### 🔐 Autenticación
+- **Pre-autenticación** – Login automático con credenciales
+- **Testing de áreas restringidas** – Mantiene sesión durante todos los tests
+- **Manejo de cookies y tokens** – Preserva estado de sesión
+
+### 🎨 Experiencia de Usuario
+- **Menú interactivo** – Interfaz colorida y fácil de usar
+- **Barras de progreso** – Visualización clara del progreso
+- **Control de errores** – Manejo elegante de `Ctrl+C`
+- **Reportes claros** – Salida estructurada y legible
+
+---
+
+## 🔧 Requisitos Previos
+
+| Requisito | Versión | Requerido |
+|-----------|---------|----------|
+| Python | 3.6+ | ✅ Sí |
+| pip | Última | ✅ Sí |
+| ffuf | Última | ❌ Opcional (mejora rendimiento) |
+| SecLists | Última | ❌ Opcional (wordlists) |
+
+### Requisitos del Sistema
+- **RAM**: Mínimo 512 MB, recomendado 2 GB
+- **Almacenamiento**: 500 MB para dependencias
+- **Red**: Conexión a internet
+- **SO**: Linux, macOS o Windows
+
+---
+
+## 📦 Instalación
+### 1️⃣ Opción A: Instalación Rápida (Recomendado)
 
 ```bash
-pip install -r requirements.txt```
-(Opcional) Instala ffuf (recomendado):
+# Clonar repositorio
+git clone https://github.com/tuusuario/wstg-scanner.git
+cd wstg-scanner
 
-bash
-sudo apt install ffuf   # Debian/Ubuntu
-# o descarga desde https://github.com/ffuf/ffuf
-Uso
-Ejecuta el script:
+# Crear entorno virtual (opcional pero recomendado)
+python3 -m venv venv
+source venv/bin/activate  # En Windows: venv\Scripts\activate
 
-bash
-python3 wstg_scanner.py
-Sigue las instrucciones en pantalla para introducir la URL objetivo y seleccionar una opción del menú.
+# Instalar dependencias Python
+pip install -r requirements.txt
 
-Menú principal
-Información general – Servidor, tecnologías, cabeceras, cookies, SSL/TLS, etc.
+# ¡Listo! Ejecutar
+python3 wstg-scanner.py
+```
 
-Fuzzing de directorios – Usa ffuf (si disponible) o método interno.
+### 2️⃣ Opción B: Instalación Completa (Con Herramientas Opcionales)
 
-Pruebas de inyección – SQLi, XSS, Path Traversal, Command Injection.
+```bash
+# Clonar y entrar
+git clone https://github.com/tuusuario/wstg-scanner.git
+cd wstg-scanner
 
-Pruebas de API – Descubre endpoints, IDOR, Mass Assignment.
+# Entorno virtual
+python3 -m venv venv
+source venv/bin/activate
 
-Enumeración de usuarios y fuerza bruta – Detecta usuarios y prueba contraseñas.
+# Dependencias Python
+pip install -r requirements.txt
 
-Spidering – Mapea todo el sitio web (enlaces y formularios).
+# Instalar ffuf (Debian/Ubuntu)
+sudo apt-get update
+sudo apt-get install -y build-essential
+wget https://github.com/ffuf/ffuf/releases/download/v2.1.0/ffuf_2.1.0_linux_amd64.tar.gz
+tar -xvf ffuf_2.1.0_linux_amd64.tar.gz
+sudo mv ffuf /usr/local/bin/
 
-Pentesting completo – Ejecuta todas las pruebas anteriores.
+# Instalar SecLists (opcional)
+git clone --depth 1 https://github.com/danielmiessler/SecLists.git /usr/share/seclists
+```
 
-Configurar autenticación – Inicia sesión en la aplicación antes de las pruebas.
+### 3️⃣ Opción C: Docker (Próximamente)
 
-Salir
+```bash
+docker pull wstg-scanner:latest
+docker run -it wstg-scanner:latest
+```
 
-Ejemplo de fuerza bruta
-Si la web tiene un formulario de login en /account/login, el script lo detectará automáticamente. Puedes usar un diccionario de contraseñas como:
+---
 
-text
-/usr/share/seclists/Passwords/xato-net-10-million-passwords-10000.txt
-Personalización
-Wordlist de directorios por defecto: directory-list-2.3-small.txt (SecLists). Se puede cambiar en el menú.
+## 🚀 Uso Rápido
 
-Wordlist de contraseñas por defecto: xato-net-10-million-passwords-10000.txt (SecLists). Si no existe, usa una lista pequeña interna.
+### Ejecución Básica
 
-Capturas de pantalla
-(Puedes añadir capturas mostrando el menú, el fuzzing con ffuf, el progreso del spidering, etc.)
+```bash
+python3 wstg-scanner.py
+```
 
-Contribuciones
-Las contribuciones son bienvenidas. Por favor, abre un issue o pull request con tus mejoras.
+Se abrirá un menú interactivo pidiendo:
+1. **URL objetivo** (ej: `https://example.com`)
+2. **Opción de test** (ver menú principal abajo)
 
-Advertencia
-Esta herramienta solo debe usarse en sistemas con autorización explícita. El uso no autorizado es ilegal y el autor no se hace responsable del mal uso.
+### Con Autenticación
+
+```bash
+python3 wstg-scanner.py
+# En el menú selecciona: "8. Configurar autenticación"
+# Ingresa usuario y contraseña
+# Luego ejecuta los tests que necesites
+```
+
+---
+
+## 📋 Menú Principal
+
+El scanner ofrece las siguientes opciones:
+
+```
+┌─ WSTG SCANNER - MENÚ PRINCIPAL ─┐
+│                                  │
+│ 1. Información General           │ -> Servidores, headers, SSL/TLS
+│ 2. Fuzzing de Directorios        │ -> Descubre endpoints ocultos
+│ 3. Pruebas de Inyección          │ -> SQLi, XSS, LFI, etc.
+│ 4. Pruebas de API                │ -> IDOR, Mass Assignment
+│ 5. Enumeración de Usuarios       │ -> Detecta usuarios válidos
+│ 6. Fuerza Bruta de Contraseñas   │ -> Ataque de passwords
+│ 7. Spidering                     │ -> Mapeo de la aplicación
+│ 8. Pentesting Completo           │ -> Ejecuta TODOS los tests
+│ 9. Configurar Autenticación      │ -> Login previo
+│ 0. Salir                         │ -> Cierra la aplicación
+│                                  │
+└──────────────────────────────────┘
+```
+
+---
+
+## 💡 Ejemplos de Uso
+
+### Ejemplo 1: Test Básico de Seguridad
+
+```bash
+$ python3 wstg-scanner.py
+Ingresa la URL objetivo: https://testphp.vulnweb.com
+
+Menú Principal:
+[1] Información General
+Ejecutando...
+[+] Servidor: Apache/2.4.41 (Ubuntu)
+[+] Headers de seguridad detectados...
+```
+
+### Ejemplo 2: Fuzzing de Directorios
+
+```
+Menú Principal:
+[2] Fuzzing de Directorios
+Ingresa wordlist (default: directory-list-2.3-small.txt): 
+[✓] /admin
+[✓] /api
+[✓] /uploads
+[✓] /backup
+```
+
+### Ejemplo 3: Pruebas de Inyección SQL
+
+```
+Menú Principal:
+[3] Pruebas de Inyección
+Selecciona tipo de inyección:
+[1] SQLi
+[2] XSS
+[3] Path Traversal
+[...] 
+
+Ejecutando SQLi...
+[!] Posible SQLi en parámetro 'id'
+[!] Type: Time-based blind
+```
+
+### Ejemplo 4: Pentesting Completo (Recomendado)
+
+```
+Menú Principal:
+[8] Pentesting Completo
+Ejecutando todos los tests...
+[████████████████░░░░] 60%
+```
+
+---
+
+## ⚙️ Configuración Avanzada
+
+### Personalizar Wordlists
+
+Edita `wstg-scanner.py` y busca estas variables:
+
+```python
+DEFAULT_DIR_WORDLIST = "/usr/share/seclists/Discovery/Web-Content/directory-list-2.3-small.txt"
+DEFAULT_PASS_WORDLIST = "/usr/share/seclists/Passwords/xato-net-10-million-passwords-10000.txt"
+```
+
+### Timeout y Velocidad
+
+```python
+REQUEST_TIMEOUT = 10  # segundos
+THREADING_WORKERS = 10  # hilos simultáneos
+FUZZING_DELAY = 0.1  # segundos entre requests
+```
+
+### Configurar Proxies
+
+```bash
+# Para usar Burp Suite como proxy
+export HTTP_PROXY=http://127.0.0.1:8080
+export HTTPS_PROXY=http://127.0.0.1:8080
+python3 wstg-scanner.py
+```
+
+---
+
+## 📊 Estructura del Proyecto
+
+```
+wstg-scanner/
+├── README.md                 # Este archivo
+├── requirements.txt          # Dependencias Python
+├── wstg-scanner.py          # Script principal
+├── LICENSE                   # Licencia MIT
+└── examples/                # Ejemplos de uso
+    ├── basic_scan.md
+    ├── authenticated_scan.md
+    └── full_pentest.md
+```
+
+---
+
+## 🐛 Solución de Problemas
+
+### Error: `ModuleNotFoundError: No module named 'requests'`
+
+```bash
+pip install -r requirements.txt
+```
+
+### Error: `ffuf: command not found`
+
+Instala ffuf manualmente desde [https://github.com/ffuf/ffuf](https://github.com/ffuf/ffuf)
+
+### Scanner lento
+
+- Reduce el número de hilos: Edita `THREADING_WORKERS = 5`
+- Aumenta el delay: `FUZZING_DELAY = 0.2`
+- Usa `-k` para ignorar advertencias SSL
+
+---
+
+## 📚 Recursos Útiles
+
+- [OWASP WSTG](https://owasp.org/www-project-web-security-testing-guide/) - Guía oficial de OWASP
+- [OWASP Top 10](https://owasp.org/www-project-top-ten/) - Top 10 vulnerabilidades
+- [ffuf Docs](https://github.com/ffuf/ffuf) - Documentación de ffuf
+- [SecLists](https://github.com/danielmiessler/SecLists) - Listas útiles para pentesting
+- [HackTricks](https://book.hacktricks.xyz/) - Trucos y técnicas
+
+---
+
+## 🤝 Contribuciones
+
+¡Las contribuciones son bienvenidas! Para contribuir:
+
+1. **Fork** el repositorio
+2. Crea una rama para tu feature (`git checkout -b feature/AmazingFeature`)
+3. Commit tus cambios (`git commit -m 'Add AmazingFeature'`)
+4. Push a la rama (`git push origin feature/AmazingFeature`)
+5. Abre un **Pull Request**
+
+### Áreas para Contribuir
+- [ ] Integración con Docker
+- [ ] Reportes en PDF/HTML
+- [ ] Testing automatizado
+- [ ] Traducción a otros idiomas
+- [ ] Mejora de wordlists
+- [ ] Interfaz gráfica (GUI)
+
+---
+
+## 📄 Licencia
+
+Este proyecto está bajo la licencia **MIT**. Ver [LICENSE](LICENSE) para detalles.
+
+---
+
+## 👨‍💻 Autor
+
+**afsh4ck** - Security Researcher & Penetration Tester
+
+- 🐙 GitHub: [@afsh4ck](https://github.com/afsh4ck)
+- 🔗 LinkedIn: [afsh4ck](https://linkedin.com/in/afsh4ck)
+- 📧 Email: afsh4ck@protonmail.com
+
+---
+
+## ⚠️ Disclaimer
+
+**IMPORTANTE**: Esta herramienta solo debe usarse en sistemas donde tienes permiso explícito para realizar testing de seguridad. 
+
+- ❌ **Uso no autorizado es ILEGAL**
+- ❌ El autor **NO se hace responsable** del mal uso
+- ⚠️ Respeta leyes locales e internacionales
+- ✅ Siempre obtén consentimiento escrito antes de testar
+
+```
+"This tool is for authorized security testing only.
+Unauthorized access to computer systems is illegal."
+```
+
+---
+
+<div align="center">
+
+⭐ Si te fue útil, ¡dale una estrella! ⭐
+
+</div>
 
 Licencia
 MIT License.
