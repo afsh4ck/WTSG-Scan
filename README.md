@@ -121,8 +121,8 @@ Diseñada para security researchers y pentesters, automatiza tareas comunes de r
 
 ```bash
 # Clonar repositorio
-git clone https://github.com/tuusuario/wstg-scanner.git
-cd wstg-scanner
+git clone https://github.com/afsh4ck/WTSG-Scan.git
+cd WTSG-Scan
 
 # Crear entorno virtual (opcional pero recomendado)
 python3 -m venv venv
@@ -139,8 +139,8 @@ python3 wstg-scanner.py
 
 ```bash
 # Clonar y entrar
-git clone https://github.com/tuusuario/wstg-scanner.git
-cd wstg-scanner
+git clone https://github.com/afsh4ck/WTSG-Scan.git
+cd WTSG-Scan
 
 # Entorno virtual
 python3 -m venv venv
