@@ -28,7 +28,7 @@ def run_nuclei_scan(target):
     if not nuclei_path:
         return None
     print_info(f"Ejecutando Nuclei sobre {target}...")
-    cmd = [nuclei_path, "-u", target, "-json"]
+    cmd = [nuclei_path, "-u", target]
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
     findings = []
     try:
