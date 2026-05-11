@@ -26,6 +26,20 @@ def check_nuclei():
 def run_nuclei_scan(target):
     nuclei_path = check_nuclei()
     if not nuclei_path:
+        return None
+    print_info(f"Ejecutando Nuclei sobre {target}...")
+    import tempfile
+    findings = []
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp_json:
+        json_path = tmp_json.name
+    try:
+        # Intentar con -json-export
+        cmd = [nuclei_path, "-u", target, "-json-export", json_path]
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        for line in process.stdout:
+            print(line, end='')
+        process.wait()
+        # Intentar leer el JSON generado
         try:
             with open(json_path, "r", encoding="utf-8", errors="ignore") as f:
                 for l in f:
@@ -53,11 +67,9 @@ def run_nuclei_scan(target):
                                 "url": url,
                                 "raw": line.strip()
                             })
-            with open(json_path, "r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
-                    if line.startswith("["):
-                        parts = line.strip().split("] ")
-                        if len(parts) >= 4:
+    except KeyboardInterrupt:
+        process.terminate()
+        print_warning("Nuclei interrumpido por el usuario.")
                             sev = parts[2].replace("[","").strip().lower()
                             template = parts[1].replace("[","").strip()
                             url = parts[3].strip()
