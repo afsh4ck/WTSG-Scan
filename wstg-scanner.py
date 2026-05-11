@@ -1,3 +1,63 @@
+import shlex
+
+# ========== INTEGRACIÓN NUCLEI ==========
+def check_nuclei():
+    path = shutil.which("nuclei")
+    if path:
+        return path
+    resp = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Nuclei no está instalado. ¿Instalar automáticamente con apt? [S/n]: ").strip().lower()
+    if resp == 'n':
+        print_warning("No se instalará Nuclei. Opción cancelada.")
+        return None
+    try:
+        print_info("Instalando Nuclei con apt...")
+        subprocess.run(["sudo", "apt", "update"], check=True)
+        subprocess.run(["sudo", "apt", "install", "-y", "nuclei"], check=True)
+        path = shutil.which("nuclei")
+        if path:
+            print_good("Nuclei instalado correctamente.")
+            return path
+        else:
+            print_error("No se pudo instalar Nuclei.")
+    except Exception as e:
+        print_error(f"Error instalando Nuclei: {e}")
+    return None
+
+def run_nuclei_scan(target):
+    nuclei_path = check_nuclei()
+    if not nuclei_path:
+        return None
+    print_info(f"Ejecutando Nuclei sobre {target}...")
+    cmd = [nuclei_path, "-u", target, "-json"]
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    findings = []
+    try:
+        for line in process.stdout:
+            print(line, end='')
+            try:
+                data = json.loads(line)
+                if isinstance(data, dict) and data.get('templateID'):
+                    findings.append(data)
+            except Exception:
+                continue
+    except KeyboardInterrupt:
+        process.terminate()
+        print_warning("Nuclei interrumpido por el usuario.")
+    process.wait()
+    print_info(f"Total vulnerabilidades detectadas por Nuclei: {len(findings)}")
+    # Resumen agrupado por severidad y template
+    summary = {}
+    for f in findings:
+        sev = f.get('info', {}).get('severity', 'unknown')
+        tid = f.get('templateID', 'unknown')
+        summary.setdefault(sev, []).append(tid)
+    print("\nResumen de vulnerabilidades:")
+    for sev, tids in summary.items():
+        print(f"  {sev.upper()}: {len(tids)} hallazgos ({', '.join(sorted(set(tids)))})")
+    # Guardar en SCAN_DATA
+    SCAN_DATA['nuclei_findings'] = findings
+    SCAN_DATA['nuclei_summary'] = {k: list(sorted(set(v))) for k,v in summary.items()}
+    return findings
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -456,6 +516,13 @@ def _html_escape(value):
     return html.escape(str(value), quote=True)
 
 def _build_html_report(report_data):
+        nuclei_summary = scan_data.get('nuclei_summary', {})
+        nuclei_html = ""
+        if nuclei_summary:
+            nuclei_html = "<div class='card' id='nuclei'><h3>Resumen Nuclei</h3><ul>"
+            for sev, tids in nuclei_summary.items():
+                nuclei_html += f"<li><b>{_html_escape(sev.upper())}</b>: {len(tids)} hallazgos ({', '.join(_html_escape(t) for t in tids)})</li>"
+            nuclei_html += "</ul></div>"
     """Genera reporte HTML con modo light/dark y secciones relevantes del escaneo."""
     scan_data = report_data.get("scan_data", {})
     findings = report_data.get("findings", [])
@@ -635,6 +702,7 @@ def _build_html_report(report_data):
         </div>
 
         <div class="card" id='hallazgos'><h3>Hallazgos</h3><ul>{findings_items}</ul></div>
+        {nuclei_html}
 
         <div class="card" id='api'>
             <h3>Endpoints API detectados</h3>
@@ -775,12 +843,19 @@ def save_report(output_file=None):
                 f.write("- Ninguna\n")
             f.write("\n")
 
+
             f.write("[HALLAZGOS]\n")
             if FINDINGS:
                 for finding in FINDINGS:
                     f.write(finding + "\n")
             else:
                 f.write("Sin hallazgos registrados.\n")
+
+            nuclei_summary = report_data["scan_data"].get("nuclei_summary", {})
+            if nuclei_summary:
+                f.write("\n[NUCLEI] Resumen de vulnerabilidades:\n")
+                for sev, tids in nuclei_summary.items():
+                    f.write(f"- {sev.upper()}: {len(tids)} hallazgos ({', '.join(tids)})\n")
 
         with open(json_file, 'w', encoding='utf-8') as f:
             json.dump(report_data, f, indent=2, ensure_ascii=False)
@@ -2340,7 +2415,7 @@ def show_menu():
     print("="*50)
 
 def run_information_gathering(target, session):
-    print_info("=== RECOLECTANDO INFORMACIÓN GENERAL ===")
+    print_info("\n======= RECOLECTANDO INFORMACIÓN GENERAL =======\n")
     info = safe_execute(gather_info, target, session)
     if info:
         SCAN_DATA["general"] = {
@@ -2365,7 +2440,7 @@ def run_information_gathering(target, session):
         safe_execute(test_cors_advanced, target, session)
 
 def run_directory_fuzzing(target, session):
-    print_info("=== FUZZING DE DIRECTORIOS ===")
+    print_info("\n======= FUZZING DE DIRECTORIOS =======\n")
     use_default = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Usar wordlist por defecto (SecLists small)? [S/n]: ").strip().lower()
     wordlist = None
     if use_default == 'n':
@@ -2383,7 +2458,7 @@ def run_directory_fuzzing(target, session):
     SCAN_DATA["directory_hits"] = hits
 
 def run_injection_tests(target, session):
-    print_info("=== PRUEBAS DE INYECCIÓN AVANZADAS ===")
+    print_info("\n======= PRUEBAS DE INYECCIÓN AVANZADAS =======\n")
     forms, url_params = safe_execute(extract_forms_and_params, target, session)
     SCAN_DATA["injection"] = {
         "executed": True,
@@ -2426,7 +2501,7 @@ def run_injection_tests(target, session):
                     safe_execute(test_open_redirect, form_url, inp, session, 'GET')
 
 def run_api_tests(target, session):
-    print_info("=== PRUEBAS DE API (OWASP API Top 10) ===")
+    print_info("\n======= PRUEBAS DE API (OWASP API Top 10) =======\n")
     print_info("[1/7] Descubrimiento de endpoints...")
     found = safe_execute(discover_api_endpoints, target, session) or []
     SCAN_DATA["api_endpoints"] = found
@@ -2450,7 +2525,7 @@ def run_api_tests(target, session):
     print_good("Pruebas de API completadas.")
 
 def run_user_enum_bruteforce(target, session):
-    print_info("=== ENUMERACIÓN DE USUARIOS Y BRUTEFORCE ===")
+    print_info("\n======= ENUMERACIÓN DE USUARIOS Y BRUTEFORCE =======\n")
     users, emails = safe_execute(enumerate_users_from_endpoints, target, session)
     SCAN_DATA["users"] = sorted(set(users or []))
     SCAN_DATA["emails"] = sorted(set(emails or []))
@@ -2473,7 +2548,7 @@ def run_user_enum_bruteforce(target, session):
             SCAN_DATA["bruteforce_credentials"] = brute_data.get("credentials", [])
 
 def run_spider(target, session):
-    print_info("=== SPIDERING / MAPEO COMPLETO DEL SITIO ===")
+    print_info("\n======= SPIDERING / MAPEO COMPLETO DEL SITIO =======\n")
     max_pages = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Máximo número de páginas a rastrear (default 500): ").strip()
     if not max_pages:
         max_pages = 500
@@ -2508,7 +2583,7 @@ def run_spider(target, session):
         print_good(f"URLs guardadas en {filename}")
 
 def run_full_pentest(target, session):
-    print_info("=== INICIANDO PENTESTING COMPLETO ===")
+    print_info("\n======= INICIANDO PENTESTING COMPLETO =======\n")
     run_information_gathering(target, session)
     run_spider(target, session)
     run_directory_fuzzing(target, session)
@@ -2600,6 +2675,7 @@ def main():
     while True:
         try:
             show_menu()
+            print("10. Análisis de vulnerabilidades con Nuclei")
             option = input("Selecciona una opción: ").strip()
         except (KeyboardInterrupt, EOFError):
             try:
@@ -2635,6 +2711,8 @@ def main():
                     print_warning("No se pudo autenticar. Continuando sin autenticación.")
             elif option == '9':
                 _exit_gracefully()
+            elif option == '10':
+                run_nuclei_scan(TARGET_URL)
             else:
                 print_error("Opción no válida. Intenta de nuevo.")
         except KeyboardInterrupt:
