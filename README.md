@@ -5,7 +5,7 @@
 
 Herramienta interactiva de pruebas de seguridad web basada en la metodología **OWASP Web Security Testing Guide (WSTG)**. Realiza enumeración, fuzzing, pruebas de inyección (SQLi, XSS, Command Injection), spidering, detección de API, enumeración de usuarios y fuerza bruta de contraseñas.
 
-![Banner](https://raw.githubusercontent.com/tuusuario/wstg-scanner/main/banner.png) *(opcional)*
+<img width="1644" height="1113" alt="image" src="https://github.com/user-attachments/assets/ddc5328f-923c-4111-abc9-39351fa0fc40" />
 
 ## Características
 
