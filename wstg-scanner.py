@@ -243,11 +243,11 @@ def run_whatweb(target):
     }
 
     try:
-        cmd = ["whatweb", "--color=never", "--log-brief=/dev/stdout", target]
+        cmd = ["whatweb", "--color=never", target]
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=30
         )
-        raw = (result.stdout + result.stderr).strip()
+        raw = result.stdout.strip()
         if not raw:
             print_warning("WhatWeb no devolvió resultados.")
             return []
