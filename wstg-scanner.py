@@ -1287,7 +1287,7 @@ def setup_authentication():
     else:
         login_url = normalize_url(login_url)
     username = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Usuario: ")
-    password = getpass.getpass("Contraseña: ")
+    password = getpass.getpass(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Contraseña: ")
 
     temp_session = get_session()
     try:
