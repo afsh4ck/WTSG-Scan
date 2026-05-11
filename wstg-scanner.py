@@ -1,115 +1,3 @@
-import shlex
-    nuclei_path = check_nuclei()
-    if not nuclei_path:
-        return None
-    print_info(f"Ejecutando Nuclei sobre {target}...")
-    import tempfile
-    findings = []
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp_json:
-            json_path = tmp_json.name
-        # Ejecutar Nuclei
-        cmd = [nuclei_path, "-u", target, "-json-export", json_path]
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-        for line in process.stdout:
-            print(line, end='')
-        process.wait()
-        # Intentar leer el JSON generado (robusto)
-        findings = []
-        with open(json_path, "rb") as f:
-            for l in f:
-                try:
-                    l = l.decode("utf-8", errors="ignore").strip()
-                    if not l:
-                        continue
-                    data = json.loads(l)
-                    if isinstance(data, dict) and data.get('templateID'):
-                        findings.append(data)
-                except Exception:
-                    continue
-        # Si no hay findings, intentar fallback texto plano
-        if not findings:
-            with open(json_path, "r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
-                    if line.startswith("["):
-                        parts = line.strip().split("] ")
-                        if len(parts) >= 4:
-                            sev = parts[2].replace("[","" ).strip().lower()
-                            template = parts[1].replace("[","" ).strip()
-                            url = parts[3].strip()
-                            findings.append({
-                                "severity": sev,
-                                "template": template,
-                                "url": url,
-                                "raw": line.strip()
-                            })
-    except KeyboardInterrupt:
-        process.terminate()
-        print_warning("Nuclei interrumpido por el usuario.")
-        return []
-    except Exception as e:
-        print_error(f"Error ejecutando Nuclei: {e}")
-        return []
-
-    # Resumen visual en consola
-    print_info(f"Total vulnerabilidades detectadas por Nuclei: {len(findings)}")
-    summary = {}
-    for f in findings:
-        sev = f.get('info', {}).get('severity', f.get('severity', 'unknown'))
-        tid = f.get('templateID', f.get('template', 'unknown'))
-        summary.setdefault(sev, []).append(tid)
-    if findings:
-        print("\nResumen de vulnerabilidades por severidad:")
-        print("+------------+----------+-------------------------+")
-        print("| Severidad  | Cantidad | Templates únicos        |")
-        print("+------------+----------+-------------------------+")
-        for sev, tids in summary.items():
-            print(f"| {sev.upper():<10} | {len(tids):<8} | {', '.join(sorted(set(tids)))[:40]}{'...' if len(', '.join(sorted(set(tids))) )>40 else ''} |")
-        print("+------------+----------+-------------------------+")
-    else:
-        print("\nNo se detectaron vulnerabilidades con Nuclei.")
-
-    # Acumular en SCAN_DATA
-    if 'nuclei_findings' not in SCAN_DATA or not isinstance(SCAN_DATA['nuclei_findings'], list):
-        SCAN_DATA['nuclei_findings'] = []
-    SCAN_DATA['nuclei_findings'].extend(findings)
-
-    # Acumular summary por severidad
-    if 'nuclei_summary' not in SCAN_DATA or not isinstance(SCAN_DATA['nuclei_summary'], dict):
-        SCAN_DATA['nuclei_summary'] = {}
-    for sev, tids in summary.items():
-        if sev not in SCAN_DATA['nuclei_summary']:
-            SCAN_DATA['nuclei_summary'][sev] = []
-        prev = set(SCAN_DATA['nuclei_summary'][sev])
-        nuevos = [tid for tid in tids if tid not in prev]
-        SCAN_DATA['nuclei_summary'][sev].extend(nuevos)
-        SCAN_DATA['nuclei_summary'][sev] = list(sorted(set(SCAN_DATA['nuclei_summary'][sev])))
-    return findings
-    summary = {}
-    for f in findings:
-        sev = f.get('info', {}).get('severity', f.get('severity', 'unknown'))
-        tid = f.get('templateID', f.get('template', 'unknown'))
-        summary.setdefault(sev, []).append(tid)
-    print("\nResumen de vulnerabilidades:")
-    for sev, tids in summary.items():
-        print(f"  {sev.upper()}: {len(tids)} hallazgos ({', '.join(sorted(set(tids)))})")
-    # Acumular en SCAN_DATA
-    if 'nuclei_findings' not in SCAN_DATA or not isinstance(SCAN_DATA['nuclei_findings'], list):
-        SCAN_DATA['nuclei_findings'] = []
-    SCAN_DATA['nuclei_findings'].extend(findings)
-
-    # Acumular summary por severidad
-    if 'nuclei_summary' not in SCAN_DATA or not isinstance(SCAN_DATA['nuclei_summary'], dict):
-        SCAN_DATA['nuclei_summary'] = {}
-    for sev, tids in summary.items():
-        if sev not in SCAN_DATA['nuclei_summary']:
-            SCAN_DATA['nuclei_summary'][sev] = []
-        # Añadir solo los nuevos templateID
-        prev = set(SCAN_DATA['nuclei_summary'][sev])
-        nuevos = [tid for tid in tids if tid not in prev]
-        SCAN_DATA['nuclei_summary'][sev].extend(nuevos)
-        SCAN_DATA['nuclei_summary'][sev] = list(sorted(set(SCAN_DATA['nuclei_summary'][sev])))
-    return findings
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -142,7 +30,6 @@ from urllib.robotparser import RobotFileParser
 
 
 # ===== INPUT CON AUTOCOMPLETADO DE RUTAS (TAB) =====
-import sys
 if os.name == 'nt':
     try:
         from prompt_toolkit import prompt
@@ -504,6 +391,134 @@ def run_whatweb(target):
     except Exception as e:
         print_error(f"Error ejecutando WhatWeb: {e}")
         return None
+
+def check_nuclei():
+    return shutil.which("nuclei")
+
+def install_nuclei():
+    """Ofrece instalar Nuclei via apt si no está disponible."""
+    print_warning("Nuclei no está instalado.")
+    try:
+        resp = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Instalar Nuclei automáticamente? (requiere sudo) [s/N]: ").strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        return False
+    if resp != 's':
+        return False
+    try:
+        print_info("Ejecutando: sudo apt-get install -y nuclei")
+        subprocess.run(["sudo", "apt-get", "install", "-y", "nuclei"], check=True)
+        if check_nuclei():
+            print_good("Nuclei instalado correctamente.")
+            return True
+        print_error("La instalación parece haber fallado.")
+        return False
+    except Exception as e:
+        print_error(f"No se pudo instalar Nuclei: {e}")
+        return False
+
+def run_nuclei_scan(target):
+    """Ejecuta Nuclei sobre el objetivo y acumula resultados en SCAN_DATA."""
+    nuclei_path = check_nuclei()
+    if not nuclei_path:
+        if not install_nuclei():
+            print_warning("Saltando análisis Nuclei.")
+            return None
+        nuclei_path = check_nuclei()
+        if not nuclei_path:
+            return None
+
+    print_info(f"Ejecutando Nuclei sobre {target}...")
+    findings = []
+    process = None
+    json_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp_json:
+            json_path = tmp_json.name
+        cmd = [nuclei_path, "-u", target, "-json-export", json_path]
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        for line in process.stdout:
+            print(line, end='')
+        process.wait()
+
+        # Intentar leer el JSON generado (robusto, una línea JSON por hallazgo)
+        with open(json_path, "rb") as f:
+            for raw_line in f:
+                try:
+                    decoded = raw_line.decode("utf-8", errors="ignore").strip()
+                    if not decoded:
+                        continue
+                    data = json.loads(decoded)
+                    if isinstance(data, dict) and data.get('templateID'):
+                        findings.append(data)
+                except Exception:
+                    continue
+
+        # Fallback texto plano si no hay findings JSON
+        if not findings:
+            with open(json_path, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    if line.startswith("["):
+                        parts = line.strip().split("] ")
+                        if len(parts) >= 4:
+                            sev = parts[2].replace("[", "").strip().lower()
+                            template = parts[1].replace("[", "").strip()
+                            url = parts[3].strip()
+                            findings.append({
+                                "severity": sev,
+                                "template": template,
+                                "url": url,
+                                "raw": line.strip()
+                            })
+    except KeyboardInterrupt:
+        if process:
+            process.terminate()
+        print_warning("Nuclei interrumpido por el usuario.")
+        return []
+    except Exception as e:
+        print_error(f"Error ejecutando Nuclei: {e}")
+        return []
+    finally:
+        if json_path:
+            try:
+                os.unlink(json_path)
+            except Exception:
+                pass
+
+    # Resumen visual en consola
+    print_info(f"Total vulnerabilidades detectadas por Nuclei: {len(findings)}")
+    summary = {}
+    for item in findings:
+        sev = item.get('info', {}).get('severity', item.get('severity', 'unknown'))
+        tid = item.get('templateID', item.get('template', 'unknown'))
+        summary.setdefault(sev, []).append(tid)
+    if findings:
+        print("\nResumen de vulnerabilidades por severidad:")
+        print("+------------+----------+-------------------------+")
+        print("| Severidad  | Cantidad | Templates únicos        |")
+        print("+------------+----------+-------------------------+")
+        for sev, tids in summary.items():
+            unique_str = ', '.join(sorted(set(tids)))
+            display = unique_str[:40] + ('...' if len(unique_str) > 40 else '')
+            print(f"| {sev.upper():<10} | {len(tids):<8} | {display:<23} |")
+        print("+------------+----------+-------------------------+")
+    else:
+        print("\nNo se detectaron vulnerabilidades con Nuclei.")
+
+    # Acumular en SCAN_DATA
+    if 'nuclei_findings' not in SCAN_DATA or not isinstance(SCAN_DATA['nuclei_findings'], list):
+        SCAN_DATA['nuclei_findings'] = []
+    SCAN_DATA['nuclei_findings'].extend(findings)
+
+    if 'nuclei_summary' not in SCAN_DATA or not isinstance(SCAN_DATA['nuclei_summary'], dict):
+        SCAN_DATA['nuclei_summary'] = {}
+    for sev, tids in summary.items():
+        if sev not in SCAN_DATA['nuclei_summary']:
+            SCAN_DATA['nuclei_summary'][sev] = []
+        prev = set(SCAN_DATA['nuclei_summary'][sev])
+        nuevos = [tid for tid in tids if tid not in prev]
+        SCAN_DATA['nuclei_summary'][sev].extend(nuevos)
+        SCAN_DATA['nuclei_summary'][sev] = list(sorted(set(SCAN_DATA['nuclei_summary'][sev])))
+    return findings
 
 def print_info(msg):
     print(f"{Fore.CYAN}[INFO]{Style.RESET_ALL} {msg}")
@@ -1202,11 +1217,7 @@ def dir_bruteforce(target, session, wordlist=None, threads=THREADS, use_ffuf=Tru
                 if process:
                     process.terminate()
                 print_warning("Fuzzing interrumpido por el usuario")
-                # Guardar resultados parciales en SCAN_DATA
-                try:
-                    from __main__ import SCAN_DATA
-                except ImportError:
-                    global SCAN_DATA
+                # Guardar resultados parciales en SCAN_DATA (mutación, no necesita global)
                 SCAN_DATA["directory_hits"] = results
                 print_good(f"Se han guardado {len(results)} directorios encontrados hasta el momento.")
                 return results
