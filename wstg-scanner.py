@@ -2431,12 +2431,12 @@ def show_menu():
     print(f"  WSTG SCANNER v{VERSION}  {auth_status}")
     print("=" * 52)
     print(" 1. Configurar autenticación (login)")
-    print(" 2. Análisis de vulnerabilidades con Nuclei")
-    print(" 3. Información general y enumeración")
-    print(" 4. Fuzzing de directorios (usa ffuf si está instalado)")
-    print(" 5. Pruebas de inyección (SQLi, XSS, Path Traversal, Command Injection)")
-    print(" 6. Pruebas de API (descubrimiento, IDOR, mass assignment)")
-    print(" 7. Enumeración de usuarios/emails y fuerza bruta de contraseñas")
+    print(" 2. Enumeración de usuarios/emails y fuerza bruta de contraseñas")
+    print(" 3. Análisis de vulnerabilidades con Nuclei")
+    print(" 4. Información general y enumeración")
+    print(" 5. Fuzzing de directorios (usa ffuf si está instalado)")
+    print(" 6. Pruebas de inyección (SQLi, XSS, Path Traversal, Command Injection)")
+    print(" 7. Pruebas de API (descubrimiento, IDOR, mass assignment)")
     print(" 8. Spidering / Mapeo completo del sitio")
     print(" 9. PENTESTING COMPLETO (ejecuta todas las pruebas anteriores)")
     print("10. Salir")
@@ -2740,17 +2740,17 @@ def main():
                 else:
                     print_warning("No se pudo autenticar. Continuando sin autenticación.")
             elif option == '2':
-                run_nuclei_scan(TARGET_URL)
-            elif option == '3':
-                run_information_gathering(TARGET_URL, session)
-            elif option == '4':
-                run_directory_fuzzing(TARGET_URL, session)
-            elif option == '5':
-                run_injection_tests(TARGET_URL, session)
-            elif option == '6':
-                run_api_tests(TARGET_URL, session)
-            elif option == '7':
                 run_user_enum_bruteforce(TARGET_URL, session)
+            elif option == '3':
+                run_nuclei_scan(TARGET_URL)
+            elif option == '4':
+                run_information_gathering(TARGET_URL, session)
+            elif option == '5':
+                run_directory_fuzzing(TARGET_URL, session)
+            elif option == '6':
+                run_injection_tests(TARGET_URL, session)
+            elif option == '7':
+                run_api_tests(TARGET_URL, session)
             elif option == '8':
                 run_spider(TARGET_URL, session)
             elif option == '9':
