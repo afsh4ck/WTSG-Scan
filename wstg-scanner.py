@@ -28,36 +28,54 @@ def run_nuclei_scan(target):
     if not nuclei_path:
         return None
     print_info(f"Ejecutando Nuclei sobre {target}...")
-    cmd = [nuclei_path, "-u", target]
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    import tempfile
     findings = []
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp_json:
+        json_path = tmp_json.name
     try:
+        # Intentar con -json-export
+        cmd = [nuclei_path, "-u", target, "-json-export", json_path]
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
         for line in process.stdout:
             print(line, end='')
-            # Intentar extraer datos clave de la salida de texto plano
-            # Ejemplo de línea: [info] [cves] [medium] http://target/path
-            if line.startswith("["):
-                parts = line.strip().split("] ")
-                if len(parts) >= 4:
-                    sev = parts[2].replace("[","").strip().lower()
-                    template = parts[1].replace("[","").strip()
-                    url = parts[3].strip()
-                    findings.append({
-                        "severity": sev,
-                        "template": template,
-                        "url": url,
-                        "raw": line.strip()
-                    })
+        process.wait()
+        # Intentar leer el JSON generado
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                for l in f:
+                    try:
+                        data = json.loads(l)
+                        if isinstance(data, dict) and data.get('templateID'):
+                            findings.append(data)
+                    except Exception:
+                        continue
+        except Exception as e:
+            print_warning(f"No se pudo leer el JSON de Nuclei, usando parseo de texto plano. Error: {e}")
+            # Fallback a texto plano si el JSON no existe o está vacío
+            findings = []
+            with open(json_path, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    if line.startswith("["):
+                        parts = line.strip().split("] ")
+                        if len(parts) >= 4:
+                            sev = parts[2].replace("[","").strip().lower()
+                            template = parts[1].replace("[","").strip()
+                            url = parts[3].strip()
+                            findings.append({
+                                "severity": sev,
+                                "template": template,
+                                "url": url,
+                                "raw": line.strip()
+                            })
     except KeyboardInterrupt:
         process.terminate()
         print_warning("Nuclei interrumpido por el usuario.")
-    process.wait()
     print_info(f"Total vulnerabilidades detectadas por Nuclei: {len(findings)}")
     # Resumen agrupado por severidad y template
     summary = {}
     for f in findings:
-        sev = f.get('severity', 'unknown')
-        tid = f.get('template', 'unknown')
+        sev = f.get('info', {}).get('severity', f.get('severity', 'unknown'))
+        tid = f.get('templateID', f.get('template', 'unknown'))
         summary.setdefault(sev, []).append(tid)
     print("\nResumen de vulnerabilidades:")
     for sev, tids in summary.items():
