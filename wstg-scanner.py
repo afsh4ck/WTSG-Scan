@@ -363,7 +363,7 @@ def run_whatweb(target):
                 else:
                     name, value = plugin.strip(), ''
 
-                technologies.append(name)
+                technologies.append({"name": name, "detail": value})
                 key = name.lower().replace(' ', '').replace('-', '')
                 color = next(
                     (v for k, v in CATEGORY_COLOR.items() if k in key),
@@ -461,9 +461,17 @@ def _build_html_report(report_data):
     findings_items = "\n".join(
         f"<li>{_html_escape(item)}</li>" for item in findings
     ) or "<li>Sin hallazgos.</li>"
-    technologies_html = "<ul class='tech-list'>" + "\n".join(
-        f"<li><span class='tag'>{_html_escape(t)}</span></li>" for t in technologies
-    ) + "</ul>" if technologies else "<span class='muted'>No detectadas</span>"
+    if technologies and isinstance(technologies[0], dict):
+        technologies_html = "<table class='tech-list'><thead><tr><th>Tecnología</th><th>Detalle</th></tr></thead><tbody>"
+        for t in technologies:
+            technologies_html += f"<tr><td>{_html_escape(t.get('name',''))}</td><td>{_html_escape(t.get('detail',''))}</td></tr>"
+        technologies_html += "</tbody></table>"
+    elif technologies:
+        technologies_html = "<ul class='tech-list'>" + "\n".join(
+            f"<li><span class='tag'>{_html_escape(t)}</span></li>" for t in technologies
+        ) + "</ul>"
+    else:
+        technologies_html = "<span class='muted'>No detectadas</span>"
     users_html = "<ul class='user-list'>" + "\n".join(
         f"<li><span class='tag'>{_html_escape(u)}</span></li>" for u in users
     ) + "</ul>" if users else "<span class='muted'>Sin usuarios</span>"
@@ -521,7 +529,7 @@ def _build_html_report(report_data):
 <head>
     <meta charset=\"utf-8\">
     <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
-    <title>WSTG Report - {_html_escape(report_data.get('target', ''))}</title>
+    <title>WSTG Report - {{_html_escape(report_data.get('target', ''))}}</title>
     <style>
         :root {{
             --bg:#f5f7fb; --panel:#ffffff; --text:#0b1320; --muted:#5c687a; --border:#d8deea;
@@ -559,6 +567,8 @@ def _build_html_report(report_data):
 </head>
 <body>
     <div class="wrap">
+        <h1 style='font-size:2.4rem; color:var(--accent); margin-bottom:10px; text-align:center;'>OWASP WSTG Security Scanner</h1>
+        <h2 style='font-size:1.7rem; color:var(--muted); margin-bottom:18px; text-align:center;'>WstgScan</h2>
         <div class="card top">
             <div class='target-card'>
                 <span class='target-icon'>🌐</span>
@@ -597,45 +607,6 @@ def _build_html_report(report_data):
         <div class="card" id='hallazgos'><h3>Hallazgos</h3><ul>{findings_items}</ul></div>
 
         <div class="card" id='api'>
-            <h3>Endpoints API detectados</h3>
-        <div class=\"card top\">
-            <div class='target-card'>
-                <span class='target-icon'>🌐</span>
-                <div>
-                    <div style='font-size:1.35rem; font-weight:600; color:var(--accent);'>{_html_escape(report_data.get('target', ''))}</div>
-                    <div class='target-meta'>Fecha: {_html_escape(report_data.get('date', ''))}</div>
-                </div>
-            </div>
-            <button id=\"themeBtn\" class=\"btn\" title='Cambiar tema'><span id='themeIcon'>🌙</span></button>
-        </div>
-
-        {nav_html}
-
-        <div class=\"card\" id='resumen'>
-            <h3>Resumen</h3>
-            <div class=\"kpi\">
-                <div><span class=\"muted\">Hallazgos</span><b>{len(findings)}</b></div>
-                <div><span class=\"muted\">Tecnologías</span><b>{len(technologies)}</b></div>
-                <div><span class=\"muted\">API</span><b>{len(endpoints)}</b></div>
-                <div><span class=\"muted\">Directorios</span><b>{len(dirs)}</b></div>
-                <div><span class=\"muted\">Usuarios</span><b>{len(users)}</b></div>
-                <div><span class=\"muted\">Credenciales</span><b>{len(creds)}</b></div>
-            </div>
-            <pre>{_html_escape(json.dumps(meta, indent=2, ensure_ascii=False))}</pre>
-        </div>
-
-        <div class=\"card\" id='info'>
-            <h3>Información general</h3>
-            <p><b>Servidor:</b> {_html_escape(scan_data.get('general', {}).get('server', 'N/A'))}</p>
-            <p><b>Status:</b> {_html_escape(scan_data.get('general', {}).get('status_code', 'N/A'))}</p>
-            <p><b>Tecnologías:</b><br>{technologies_html}</p>
-            <p><b>Usuarios:</b><br>{users_html}</p>
-            <p><b>Emails:</b><br>{emails_html}</p>
-        </div>
-
-        <div class=\"card\" id='hallazgos'><h3>Hallazgos</h3><ul>{findings_items}</ul></div>
-
-        <div class=\"card\" id='api'>
             <h3>Endpoints API detectados</h3>
             <table><thead><tr><th>Status</th><th>Endpoint</th><th>URL</th><th>Content-Type</th></tr></thead><tbody>{endpoint_rows}</tbody></table>
         </div>
@@ -1998,12 +1969,21 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
                 process = subprocess.Popen(hydra_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
                 for line in process.stdout:
                     print(line, end='')
-                    if "login:" in line or "[80][http-post-form]" in line or "[SUCCESS]" in line:
-                        # Parsear credenciales
-                        m = re.search(r'login: ([^ ]+) +password: ([^ ]+)', line)
+                    # Buscar credenciales en cualquier línea relevante
+                    if ("login:" in line and "password:" in line):
+                        # Captura flexible: login:<user> password:<pass> (con cualquier espacio/tab)
+                        m = re.search(r'login:\s*([^\s]+)\s*password:\s*([^\s]+)', line)
                         if m:
                             user, pwd = m.group(1), m.group(2)
                             result_data["credentials"].append({"username": user, "password": pwd})
+                        else:
+                            # Captura aún más flexible: buscar palabras login y password y extraer lo que sigue
+                            login_idx = line.find("login:")
+                            pass_idx = line.find("password:")
+                            if login_idx != -1 and pass_idx != -1:
+                                user = line[login_idx+len("login:"):pass_idx].strip().split()[0]
+                                pwd = line[pass_idx+len("password:"):].strip().split()[0]
+                                result_data["credentials"].append({"username": user, "password": pwd})
                 process.wait()
                 print_info("Hydra finalizado.")
             except Exception as e:
