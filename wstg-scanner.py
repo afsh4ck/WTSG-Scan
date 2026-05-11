@@ -432,43 +432,61 @@ def run_nuclei_scan(target):
     process = None
     json_path = None
     try:
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp_json:
+        with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as tmp_json:
             json_path = tmp_json.name
-        cmd = [nuclei_path, "-u", target, "-json-export", json_path]
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-        for line in process.stdout:
-            print(line, end='')
+        # Usamos -jsonl-export (jsonlines, una línea JSON por hallazgo) para robustez.
+        cmd = [nuclei_path, "-u", target, "-jsonl-export", json_path, "-silent=false"]
+        # IMPORTANTE: stdout en modo binario para evitar UnicodeDecodeError con
+        # banners/símbolos no-UTF8 que emite Nuclei. Decodificamos tolerante.
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
+        for raw_line in iter(process.stdout.readline, b""):
+            try:
+                print(raw_line.decode("utf-8", errors="replace"), end='')
+            except Exception:
+                pass
         process.wait()
 
-        # Intentar leer el JSON generado (robusto, una línea JSON por hallazgo)
-        with open(json_path, "rb") as f:
-            for raw_line in f:
-                try:
-                    decoded = raw_line.decode("utf-8", errors="ignore").strip()
-                    if not decoded:
-                        continue
-                    data = json.loads(decoded)
-                    if isinstance(data, dict) and data.get('templateID'):
-                        findings.append(data)
-                except Exception:
-                    continue
+        # Si la versión de Nuclei no soporta -jsonl-export, reintentar con -json-export
+        if (not os.path.isfile(json_path) or os.path.getsize(json_path) == 0):
+            try:
+                cmd_alt = [nuclei_path, "-u", target, "-json-export", json_path]
+                proc2 = subprocess.Popen(cmd_alt, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
+                for raw_line in iter(proc2.stdout.readline, b""):
+                    try:
+                        print(raw_line.decode("utf-8", errors="replace"), end='')
+                    except Exception:
+                        pass
+                proc2.wait()
+            except Exception:
+                pass
 
-        # Fallback texto plano si no hay findings JSON
-        if not findings:
-            with open(json_path, "r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
-                    if line.startswith("["):
-                        parts = line.strip().split("] ")
-                        if len(parts) >= 4:
-                            sev = parts[2].replace("[", "").strip().lower()
-                            template = parts[1].replace("[", "").strip()
-                            url = parts[3].strip()
-                            findings.append({
-                                "severity": sev,
-                                "template": template,
-                                "url": url,
-                                "raw": line.strip()
-                            })
+        # Leer el JSON/JSONL generado de forma robusta (una entrada JSON por línea
+        # o un array JSON completo según versión)
+        if os.path.isfile(json_path) and os.path.getsize(json_path) > 0:
+            with open(json_path, "rb") as f:
+                content = f.read().decode("utf-8", errors="ignore").strip()
+            # Caso 1: array JSON
+            if content.startswith("["):
+                try:
+                    arr = json.loads(content)
+                    if isinstance(arr, list):
+                        for data in arr:
+                            if isinstance(data, dict) and (data.get('template-id') or data.get('templateID')):
+                                findings.append(data)
+                except Exception:
+                    pass
+            # Caso 2: JSONL (una entrada por línea)
+            if not findings:
+                for line in content.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                        if isinstance(data, dict) and (data.get('template-id') or data.get('templateID')):
+                            findings.append(data)
+                    except Exception:
+                        continue
     except KeyboardInterrupt:
         if process:
             process.terminate()
@@ -484,30 +502,75 @@ def run_nuclei_scan(target):
             except Exception:
                 pass
 
-    # Resumen visual en consola
-    print_info(f"Total vulnerabilidades detectadas por Nuclei: {len(findings)}")
+    # Normalizar hallazgos a un formato estable para reportes
+    def _extract(item):
+        info = item.get('info') if isinstance(item.get('info'), dict) else {}
+        return {
+            'template_id': item.get('template-id') or item.get('templateID') or item.get('template') or 'unknown',
+            'name': info.get('name') or item.get('name') or '',
+            'severity': (info.get('severity') or item.get('severity') or 'unknown').lower(),
+            'url': item.get('matched-at') or item.get('host') or item.get('url') or '',
+            'type': item.get('type') or info.get('type') or '',
+            'tags': info.get('tags') or [],
+            'description': (info.get('description') or '').strip(),
+            'reference': info.get('reference') or [],
+        }
+
+    SEV_ORDER = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4, 'unknown': 5}
+    SEV_COLOR = {
+        'critical': Fore.MAGENTA, 'high': Fore.RED, 'medium': Fore.YELLOW,
+        'low': Fore.CYAN, 'info': Fore.WHITE, 'unknown': Fore.WHITE,
+    }
+
+    normalized = [_extract(it) for it in findings]
+    normalized.sort(key=lambda x: (SEV_ORDER.get(x['severity'], 99), x['template_id']))
+
+    # Resumen por severidad
     summary = {}
-    for item in findings:
-        sev = item.get('info', {}).get('severity', item.get('severity', 'unknown'))
-        tid = item.get('templateID', item.get('template', 'unknown'))
-        summary.setdefault(sev, []).append(tid)
-    if findings:
+    for n in normalized:
+        summary.setdefault(n['severity'], []).append(n['template_id'])
+
+    print_info(f"Total vulnerabilidades detectadas por Nuclei: {len(normalized)}")
+    if normalized:
+        # Tabla resumen por severidad
         print("\nResumen de vulnerabilidades por severidad:")
         print("+------------+----------+-------------------------+")
         print("| Severidad  | Cantidad | Templates únicos        |")
         print("+------------+----------+-------------------------+")
-        for sev, tids in summary.items():
+        for sev in sorted(summary.keys(), key=lambda s: SEV_ORDER.get(s, 99)):
+            tids = summary[sev]
             unique_str = ', '.join(sorted(set(tids)))
             display = unique_str[:40] + ('...' if len(unique_str) > 40 else '')
             print(f"| {sev.upper():<10} | {len(tids):<8} | {display:<23} |")
         print("+------------+----------+-------------------------+")
+
+        # Detalle por hallazgo (solo severidades relevantes en consola)
+        relevant = [n for n in normalized if n['severity'] in ('critical', 'high', 'medium', 'low')]
+        if relevant:
+            print("\nHallazgos relevantes:")
+            for n in relevant[:50]:
+                color = SEV_COLOR.get(n['severity'], Fore.WHITE)
+                print(f"  {color}[{n['severity'].upper():<8}]{Style.RESET_ALL} "
+                      f"{n['template_id']:<40} -> {n['url']}")
+                if n['name']:
+                    print(f"             {n['name']}")
+            if len(relevant) > 50:
+                print(f"  ... y {len(relevant) - 50} hallazgos relevantes más (ver reporte)")
+
+        # Persistir cada hallazgo en FINDINGS para que aparezca en TXT/HTML
+        for n in normalized:
+            FINDINGS.append(
+                f"[NUCLEI:{n['severity'].upper()}] {n['template_id']}"
+                + (f" — {n['name']}" if n['name'] else "")
+                + (f" @ {n['url']}" if n['url'] else "")
+            )
     else:
         print("\nNo se detectaron vulnerabilidades con Nuclei.")
 
-    # Acumular en SCAN_DATA
+    # Acumular en SCAN_DATA: detalle + resumen
     if 'nuclei_findings' not in SCAN_DATA or not isinstance(SCAN_DATA['nuclei_findings'], list):
         SCAN_DATA['nuclei_findings'] = []
-    SCAN_DATA['nuclei_findings'].extend(findings)
+    SCAN_DATA['nuclei_findings'].extend(normalized)
 
     if 'nuclei_summary' not in SCAN_DATA or not isinstance(SCAN_DATA['nuclei_summary'], dict):
         SCAN_DATA['nuclei_summary'] = {}
@@ -518,7 +581,7 @@ def run_nuclei_scan(target):
         nuevos = [tid for tid in tids if tid not in prev]
         SCAN_DATA['nuclei_summary'][sev].extend(nuevos)
         SCAN_DATA['nuclei_summary'][sev] = list(sorted(set(SCAN_DATA['nuclei_summary'][sev])))
-    return findings
+    return normalized
 
 def print_info(msg):
     print(f"{Fore.CYAN}[INFO]{Style.RESET_ALL} {msg}")
@@ -596,12 +659,42 @@ def _build_html_report(report_data):
     meta = scan_data.get("stats", {})
 
     nuclei_summary = scan_data.get('nuclei_summary', {})
+    nuclei_findings_list = scan_data.get('nuclei_findings', []) or []
     nuclei_html = ""
-    if nuclei_summary:
-        nuclei_html = "<div class='card' id='nuclei'><h3>Resumen Nuclei</h3><ul>"
-        for sev, tids in nuclei_summary.items():
-            nuclei_html += f"<li><b>{_html_escape(sev.upper())}</b>: {len(tids)} hallazgos ({', '.join(_html_escape(t) for t in tids)})</li>"
-        nuclei_html += "</ul></div>"
+    if nuclei_summary or nuclei_findings_list:
+        sev_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4, 'unknown': 5}
+        nuclei_html = "<div class='card' id='nuclei'><h3>Análisis Nuclei</h3>"
+        if nuclei_summary:
+            nuclei_html += "<h4>Resumen por severidad</h4><ul>"
+            for sev in sorted(nuclei_summary.keys(), key=lambda s: sev_order.get(s, 99)):
+                tids = nuclei_summary[sev]
+                nuclei_html += (
+                    f"<li><b>{_html_escape(sev.upper())}</b>: {len(tids)} hallazgos "
+                    f"({', '.join(_html_escape(t) for t in tids)})</li>"
+                )
+            nuclei_html += "</ul>"
+        if nuclei_findings_list:
+            sorted_findings = sorted(
+                nuclei_findings_list,
+                key=lambda x: (sev_order.get((x.get('severity') or 'unknown'), 99),
+                               x.get('template_id', ''))
+            )
+            nuclei_html += (
+                "<h4>Detalle de hallazgos</h4>"
+                "<table><thead><tr><th>Severidad</th><th>Template</th>"
+                "<th>Nombre</th><th>URL afectada</th></tr></thead><tbody>"
+            )
+            for n in sorted_findings[:500]:
+                nuclei_html += (
+                    "<tr>"
+                    f"<td>{_html_escape((n.get('severity') or '').upper())}</td>"
+                    f"<td>{_html_escape(n.get('template_id', ''))}</td>"
+                    f"<td>{_html_escape(n.get('name', ''))}</td>"
+                    f"<td>{_html_escape(n.get('url', ''))}</td>"
+                    "</tr>"
+                )
+            nuclei_html += "</tbody></table>"
+        nuclei_html += "</div>"
 
     findings_items = "\n".join(
         f"<li>{_html_escape(item)}</li>" for item in findings
@@ -920,10 +1013,27 @@ def save_report(output_file=None):
                 f.write("Sin hallazgos registrados.\n")
 
             nuclei_summary = report_data["scan_data"].get("nuclei_summary", {})
+            nuclei_findings_list = report_data["scan_data"].get("nuclei_findings", []) or []
+            sev_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4, 'unknown': 5}
             if nuclei_summary:
                 f.write("\n[NUCLEI] Resumen de vulnerabilidades:\n")
-                for sev, tids in nuclei_summary.items():
+                for sev in sorted(nuclei_summary.keys(), key=lambda s: sev_order.get(s, 99)):
+                    tids = nuclei_summary[sev]
                     f.write(f"- {sev.upper()}: {len(tids)} hallazgos ({', '.join(tids)})\n")
+            if nuclei_findings_list:
+                f.write("\n[NUCLEI] Detalle de hallazgos:\n")
+                sorted_findings = sorted(
+                    nuclei_findings_list,
+                    key=lambda x: (sev_order.get((x.get('severity') or 'unknown'), 99),
+                                   x.get('template_id', ''))
+                )
+                for n in sorted_findings:
+                    sev = (n.get('severity') or 'unknown').upper()
+                    tid = n.get('template_id', '')
+                    name = n.get('name', '')
+                    url = n.get('url', '')
+                    f.write(f"- [{sev}] {tid}" + (f" — {name}" if name else "") +
+                            (f" @ {url}" if url else "") + "\n")
 
         with open(json_file, 'w', encoding='utf-8') as f:
             json.dump(report_data, f, indent=2, ensure_ascii=False)
