@@ -473,9 +473,15 @@ def _build_html_report(report_data):
     ) or "<li>Sin hallazgos.</li>"
     if technologies:
         if isinstance(technologies[0], dict):
-            technologies_html = "<table class='tech-list'><thead><tr><th>Tecnología</th><th>Detalle</th></tr></thead><tbody>"
+            # Detectar todas las claves presentes
+            all_keys = set()
             for t in technologies:
-                technologies_html += f"<tr><td>{_html_escape(t.get('name',''))}</td><td>{_html_escape(t.get('detail',''))}</td></tr>"
+                all_keys.update(t.keys())
+            # Siempre mostrar 'name' y 'detail' primero si existen
+            ordered_keys = [k for k in ('name','detail') if k in all_keys] + [k for k in sorted(all_keys) if k not in ('name','detail')]
+            technologies_html = "<table class='tech-list'><thead><tr>" + ''.join(f"<th>{_html_escape(k.capitalize())}</th>" for k in ordered_keys) + "</tr></thead><tbody>"
+            for t in technologies:
+                technologies_html += "<tr>" + ''.join(f"<td>{_html_escape(str(t.get(k,'')))}</td>" for k in ordered_keys) + "</tr>"
             technologies_html += "</tbody></table>"
         else:
             technologies_html = "<ul class='tech-list'>" + "\n".join(
