@@ -1325,9 +1325,10 @@ def extract_forms_and_params(target, session):
 
 def advanced_injection_tests(url, param, session, method='GET'):
     try:
+        # SQLi
         for payload in ['\' OR SLEEP(5)-- ', '1\' AND (SELECT * FROM (SELECT(SLEEP(5)))a)--']:
-            start = time.time()
             try:
+                start = time.time()
                 if method == 'GET':
                     test_url = f"{url}?{param}={payload}"
                     session.get(test_url, timeout=DEFAULT_TIMEOUT+2)
@@ -1336,8 +1337,13 @@ def advanced_injection_tests(url, param, session, method='GET'):
                 elapsed = time.time() - start
                 if elapsed > 4:
                     print_vuln(f"Posible SQLi time-based en {param} (retraso {elapsed:.2f}s)")
+                    return True
+            except KeyboardInterrupt:
+                print_warning("Prueba de inyección interrumpida por el usuario.")
+                return False
             except:
                 pass
+        # XSS
         for payload in XSS_PAYLOADS:
             try:
                 if method == 'GET':
@@ -1347,8 +1353,13 @@ def advanced_injection_tests(url, param, session, method='GET'):
                     resp = session.post(url, data={param: payload}, timeout=DEFAULT_TIMEOUT)
                 if payload in resp.text and ('<script>' in payload or 'onerror=' in payload):
                     print_vuln(f"Posible XSS en {param} con payload: {payload}")
+                    return True
+            except KeyboardInterrupt:
+                print_warning("Prueba de inyección interrumpida por el usuario.")
+                return False
             except:
                 pass
+        # Command Injection
         for payload in COMMAND_INJECT:
             try:
                 if method == 'GET':
@@ -1358,10 +1369,16 @@ def advanced_injection_tests(url, param, session, method='GET'):
                     resp = session.post(url, data={param: payload}, timeout=DEFAULT_TIMEOUT)
                 if "uid=" in resp.text or "Directory of" in resp.text:
                     print_vuln(f"Posible Command Injection en {param} con payload: {payload}")
+                    return True
+            except KeyboardInterrupt:
+                print_warning("Prueba de inyección interrumpida por el usuario.")
+                return False
             except:
                 pass
+        return False
     except Exception as e:
         print_error(f"Error en advanced_injection_tests para {param}: {e}")
+        return False
 
 def test_path_traversal(url, param, session, method='GET'):
     try:
@@ -1375,6 +1392,9 @@ def test_path_traversal(url, param, session, method='GET'):
                 if "root:" in resp.text or "[extensions]" in resp.text:
                     print_vuln(f"Path Traversal en {param}: {payload}")
                     return True
+            except KeyboardInterrupt:
+                print_warning("Prueba de Path Traversal interrumpida por el usuario.")
+                return False
             except:
                 pass
         return False
@@ -1395,10 +1415,16 @@ def test_open_redirect(url, param, session, method='GET'):
                     location = resp.headers.get('Location', '')
                     if 'evil.com' in location or '//' in location:
                         print_vuln(f"Open Redirect en {param} -> {location}")
+                        return True
+            except KeyboardInterrupt:
+                print_warning("Prueba de Open Redirect interrumpida por el usuario.")
+                return False
             except:
                 pass
+        return False
     except Exception as e:
         print_error(f"Error en open redirect: {e}")
+        return False
 
 def check_security_headers(headers):
     try:
@@ -2459,46 +2485,62 @@ def run_directory_fuzzing(target, session):
 
 def run_injection_tests(target, session):
     print_info("\n======= PRUEBAS DE INYECCIÓN AVANZADAS =======\n")
-    forms, url_params = safe_execute(extract_forms_and_params, target, session)
-    SCAN_DATA["injection"] = {
-        "executed": True,
-        "forms_found": len(forms or []),
-        "url_params_found": len(url_params or []),
-        "tested_get_params": [],
-        "tested_form_inputs": [],
-        "forms": (forms or [])[:120],
-    }
-    if not forms and not url_params:
-        print_warning("No se encontraron parámetros ni formularios para probar.")
+    try:
+        forms, url_params = safe_execute(extract_forms_and_params, target, session)
+        SCAN_DATA["injection"] = {
+            "executed": True,
+            "forms_found": len(forms or []),
+            "url_params_found": len(url_params or []),
+            "tested_get_params": [],
+            "tested_form_inputs": [],
+            "forms": (forms or [])[:120],
+        }
+        if not forms and not url_params:
+            print_warning("No se encontraron parámetros ni formularios para probar.")
+            return
+        if url_params:
+            print_info(f"Probando {len(url_params)} parámetros GET...")
+            for param in url_params:
+                if advanced_injection_tests(target, param, session, 'GET'):
+                    SCAN_DATA["injection"]["tested_get_params"].append(param)
+                    continue
+                if test_path_traversal(target, param, session, 'GET'):
+                    SCAN_DATA["injection"]["tested_get_params"].append(param)
+                    continue
+                if test_open_redirect(target, param, session, 'GET'):
+                    SCAN_DATA["injection"]["tested_get_params"].append(param)
+                    continue
+                SCAN_DATA["injection"]["tested_get_params"].append(param)
+        if forms:
+            print_info(f"Probando {len(forms)} formularios...")
+            for form in forms:
+                action = form['action']
+                method = form['method']
+                inputs = form['inputs']
+                form_url = action if action else form.get('page_url', target)
+                for inp in inputs:
+                    SCAN_DATA["injection"]["tested_form_inputs"].append({
+                        "url": form_url,
+                        "method": method,
+                        "input": inp,
+                    })
+                    if method == 'POST':
+                        if advanced_injection_tests(form_url, inp, session, 'POST'):
+                            continue
+                        if test_path_traversal(form_url, inp, session, 'POST'):
+                            continue
+                        if test_open_redirect(form_url, inp, session, 'POST'):
+                            continue
+                    else:
+                        if advanced_injection_tests(form_url, inp, session, 'GET'):
+                            continue
+                        if test_path_traversal(form_url, inp, session, 'GET'):
+                            continue
+                        if test_open_redirect(form_url, inp, session, 'GET'):
+                            continue
+    except KeyboardInterrupt:
+        print_warning("Pruebas de inyección interrumpidas por el usuario.")
         return
-    if url_params:
-        print_info(f"Probando {len(url_params)} parámetros GET...")
-        for param in url_params:
-            safe_execute(advanced_injection_tests, target, param, session, 'GET')
-            safe_execute(test_path_traversal, target, param, session, 'GET')
-            safe_execute(test_open_redirect, target, param, session, 'GET')
-            SCAN_DATA["injection"]["tested_get_params"].append(param)
-    if forms:
-        print_info(f"Probando {len(forms)} formularios...")
-        for form in forms:
-            action = form['action']
-            method = form['method']
-            inputs = form['inputs']
-            form_url = action if action else form.get('page_url', target)
-            for inp in inputs:
-                SCAN_DATA["injection"]["tested_form_inputs"].append({
-                    "url": form_url,
-                    "method": method,
-                    "input": inp,
-                })
-                if method == 'POST':
-                    safe_execute(advanced_injection_tests, form_url, inp, session, 'POST')
-                    safe_execute(test_path_traversal, form_url, inp, session, 'POST')
-                    safe_execute(test_open_redirect, form_url, inp, session, 'POST')
-                else:
-                    safe_execute(advanced_injection_tests, form_url, inp, session, 'GET')
-                    safe_execute(test_path_traversal, form_url, inp, session, 'GET')
-                    safe_execute(test_open_redirect, form_url, inp, session, 'GET')
 
 def run_api_tests(target, session):
     print_info("\n======= PRUEBAS DE API (OWASP API Top 10) =======\n")
