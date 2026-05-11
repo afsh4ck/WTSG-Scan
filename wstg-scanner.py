@@ -1726,9 +1726,37 @@ def main():
 
     session = get_session()
 
+    def _exit_gracefully():
+        """Cierra el programa mostrando el reporte y el mensaje final."""
+        print()
+        if FINDINGS:
+            auto_save = OUTPUT_FILE is not None
+            if not auto_save:
+                try:
+                    auto_save = input(
+                        f"\n¿Guardar reporte con {len(FINDINGS)} hallazgos? [S/n]: "
+                    ).strip().lower() != 'n'
+                except (KeyboardInterrupt, EOFError):
+                    auto_save = False
+            if auto_save:
+                save_report(OUTPUT_FILE)
+        print("\n" + Fore.GREEN + "Happy Hacking :)" + Style.RESET_ALL)
+        sys.exit(0)
+
     while True:
-        show_menu()
-        option = input("Selecciona una opción: ").strip()
+        try:
+            show_menu()
+            option = input("Selecciona una opción: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            try:
+                print()
+                confirm = input("\n¿Salir del programa? [S/n]: ").strip().lower()
+            except (KeyboardInterrupt, EOFError):
+                confirm = 's'
+            if confirm != 'n':
+                _exit_gracefully()
+            continue
+
         try:
             if option == '1':
                 run_information_gathering(TARGET_URL, session)
@@ -1752,30 +1780,27 @@ def main():
                 else:
                     print_warning("No se pudo autenticar. Continuando sin autenticación.")
             elif option == '9':
-                print_info("Saliendo...")
-                break
+                _exit_gracefully()
             else:
                 print_error("Opción no válida. Intenta de nuevo.")
         except KeyboardInterrupt:
-            print("\n")
-            print_warning("Interrupción detectada. Saliendo...")
-            break
+            try:
+                print()
+                confirm = input("\n¿Salir del programa? [S/n]: ").strip().lower()
+            except (KeyboardInterrupt, EOFError):
+                confirm = 's'
+            if confirm != 'n':
+                _exit_gracefully()
+            continue
         except Exception as e:
             print_error(f"Error inesperado: {e}")
 
-        input("\nPresiona Enter para continuar...")
+        try:
+            input("\nPresiona Enter para continuar...")
+        except (KeyboardInterrupt, EOFError):
+            _exit_gracefully()
 
-    if FINDINGS:
-        auto_save = OUTPUT_FILE is not None
-        if not auto_save:
-            auto_save = input(
-                f"\n¿Guardar reporte con {len(FINDINGS)} hallazgos? [S/n]: "
-            ).strip().lower() != 'n'
-        if auto_save:
-            save_report(OUTPUT_FILE)
-
-    print("\n" + Fore.GREEN + "Happy Hacking :)" + Style.RESET_ALL)
-    sys.exit(0)
+    _exit_gracefully()
 
 if __name__ == "__main__":
     main()
