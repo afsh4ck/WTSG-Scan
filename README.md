@@ -235,25 +235,35 @@ python3 wstg-scan.py
 ## 📋 Menú Principal
 
 ```
-┌─ WSTG SCANNER v1.2 ──────────────────────────────┐
-│                                                   │
-│  1. Configurar autenticación (login)              │
-│  2. Información general y enumeración             │
-│  3. Análisis de vulnerabilidades con Nuclei       │
-│  4. Fuzzing de subdominios (vhost) con ffuf       │
-│  5. Fuzzing de directorios (ffuf)                 │
-│  6. Spidering / Mapeo completo del sitio          │
-│  7. Pruebas de inyección (SQLi, XSS, LFI…)        │
-│  8. Pruebas de API (IDOR, Mass Assignment…)       │
-│  9. Enumeración de usuarios + bruteforce          │
-│ 10. PENTESTING COMPLETO (todas las pruebas)       │
-│ 11. Mostrar resumen en Markdown   *               │
-│ 12. Mostrar tablas de resultados  *               │
-│ 13. Salir                                         │
-│                                                   │
-│  * solo aparecen tras ejecutar algún módulo       │
-└───────────────────────────────────────────────────┘
+        _       __       __         _____                   
+| |     / /_____ / /_ ____ _/ ___/ _____ ____ _ ____ 
+| | /| / // ___// __// __ `/\__ \ / ___// __ `// __ \
+| |/ |/ /(__  )/ /_ / /_/ /___/ // /__ / /_/ // / / /
+|__/|__//____/ \__/ \__, //____/ \___/ \__,_//_/ /_/ 
+                   /____/                            
+
+OWASP Web Security Testing Scanner
+developed by @afsh4ck
+
+====================================================
+  WSTG SCANNER v1.2.0  [Sin autenticación]
+====================================================
+ 1. Configurar autenticación (login)
+ 2. Información general y enumeración
+ 3. Análisis de vulnerabilidades con Nuclei
+ 4. Fuzzing de subdominios (vhost) con ffuf
+ 5. Fuzzing de directorios (usa ffuf si está instalado)
+ 6. Spidering / Mapeo completo del sitio
+ 7. Pruebas de inyección (SQLi, XSS, Path Traversal, Command Injection)
+ 8. Pruebas de API (descubrimiento, IDOR, mass assignment)
+ 9. Enumeración de usuarios/emails y fuerza bruta de contraseñas
+10. PENTESTING COMPLETO (ejecuta todas las pruebas anteriores)
+13. Salir
+==================================================
+Selecciona una opción:
 ```
+
+> Tras ejecutar algún módulo o el pentesting completo aparecen también las opciones **11** (`Mostrar resumen en Markdown`) y **12** (`Mostrar tablas de resultados`) para revisar el resumen sin volver a escanear.
 
 > La opción **10** ejecuta secuencialmente: información → Nuclei → **vhost** → fuzzing dirs → spidering → inyección → API → bruteforce, y muestra al final el resumen visual con todas las tablas. Al salir, se ofrece guardar el reporte.
 >
