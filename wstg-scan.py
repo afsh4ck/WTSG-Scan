@@ -1646,6 +1646,12 @@ def _build_markdown_report(report_data):
             return f"{name} ({detail})" if name and detail else (name or detail or "")
         return str(item)
 
+    def _count_label(total, limit):
+        """'(N)' si total <= limit; '(top limit de total)' en caso contrario."""
+        if total <= limit:
+            return f"({total})"
+        return f"(top {limit} de {total})"
+
     SEV_ORDER = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4, 'unknown': 5}
 
     parts = []
@@ -1728,14 +1734,14 @@ def _build_markdown_report(report_data):
         parts.append("")
         sample_urls = spider.get("sample_urls") or []
         if sample_urls:
-            parts.append(f"### Muestra de URLs descubiertas (top {min(30, len(sample_urls))} de {spider.get('total_urls', 0)})")
+            parts.append(f"### Muestra de URLs descubiertas {_count_label(len(sample_urls), 30)}")
             parts.append("")
             parts.append(_md_table(["URL"], [[u] for u in sample_urls[:30]]))
             parts.append("")
 
     # 6a. Subdominios (vhosts)
     if vhosts:
-        parts.append(f"## Subdominios (vhosts) encontrados (top 50 de {len(vhosts)})")
+        parts.append(f"## Subdominios (vhosts) encontrados {_count_label(len(vhosts), 50)}")
         parts.append("")
         rows = [[str(v.get("status", "-")),
                  str(v.get("fqdn") or v.get("subdomain", "-")),
@@ -1746,7 +1752,7 @@ def _build_markdown_report(report_data):
 
     # 6b. Directorios
     if dir_hits:
-        parts.append(f"## Directorios encontrados (top 50 de {len(dir_hits)})")
+        parts.append(f"## Directorios encontrados {_count_label(len(dir_hits), 50)}")
         parts.append("")
         rows = [[str(h.get("status", "-")), str(h.get("url", "-")), str(h.get("size", "-"))]
                 for h in dir_hits[:50]]
@@ -1755,7 +1761,7 @@ def _build_markdown_report(report_data):
 
     # 7. API endpoints
     if api_endpoints:
-        parts.append(f"## Endpoints API descubiertos (top 50 de {len(api_endpoints)})")
+        parts.append(f"## Endpoints API descubiertos {_count_label(len(api_endpoints), 50)}")
         parts.append("")
         rows = [[str(ep.get("status", "-")),
                  str(ep.get("endpoint") or ep.get("url", "-")),
@@ -1818,7 +1824,7 @@ def _build_markdown_report(report_data):
         sorted_rel = sorted(relevant_nuclei,
                             key=lambda x: (SEV_ORDER.get((x.get('severity') or 'unknown').lower(), 99),
                                            str(x.get('template_id', ''))))
-        parts.append(f"## Hallazgos Nuclei relevantes (top 100 de {len(sorted_rel)})")
+        parts.append(f"## Hallazgos Nuclei relevantes {_count_label(len(sorted_rel), 100)}")
         parts.append("")
         rows = [[(n.get('severity') or '').upper(),
                  str(n.get('template_id', '-')),
@@ -4054,8 +4060,9 @@ def show_menu():
     print(" 9. Enumeración de usuarios/emails y fuerza bruta de contraseñas")
     print("10. PENTESTING COMPLETO (ejecuta todas las pruebas anteriores)")
     if _has_scan_data():
-        print("12. Mostrar resumen en Markdown")
-    print("11. Salir")
+        print("11. Mostrar resumen en Markdown")
+        print("12. Mostrar tablas de resultados (formato visual)")
+    print("13. Salir")
     print("="*50)
 
 def run_information_gathering(target, session):
@@ -4311,6 +4318,11 @@ def print_final_summary(target):
     def _join_safe(items, sep=", "):
         return sep.join(_stringify(i) for i in (items or []))
 
+    def _count_label(total, limit):
+        if total <= limit:
+            return f"({total})"
+        return f"(top {limit} de {total})"
+
     print_phase("RESUMEN FINAL DEL PENTESTING")
 
     general = SCAN_DATA.get("general") or {}
@@ -4415,7 +4427,7 @@ def print_final_summary(target):
                 headers=["URL"],
                 rows=url_rows,
                 alignments=['<'],
-                title=f"Muestra de URLs descubiertas (top {len(url_rows)} de {spider.get('total_urls', 0)}):",
+                title=f"Muestra de URLs descubiertas {_count_label(spider.get('total_urls', 0), len(url_rows))}:",
             )
 
     # 6a. Subdominios (vhosts)
@@ -4431,7 +4443,7 @@ def print_final_summary(target):
             headers=["Status", "VHost", "Tamaño"],
             rows=vh_rows,
             alignments=['<', '<', '>'],
-            title=f"Subdominios encontrados (top {len(vh_rows)} de {len(vhosts)}):",
+            title=f"Subdominios encontrados {_count_label(len(vhosts), len(vh_rows))}:",
         )
 
     # 6b. Directorios
@@ -4447,7 +4459,7 @@ def print_final_summary(target):
             headers=["Status", "URL", "Tamaño"],
             rows=dir_rows,
             alignments=['<', '<', '>'],
-            title=f"Directorios encontrados (top {len(dir_rows)} de {len(dir_hits)}):",
+            title=f"Directorios encontrados {_count_label(len(dir_hits), len(dir_rows))}:",
         )
 
     # 7. API endpoints
@@ -4462,7 +4474,7 @@ def print_final_summary(target):
             headers=["Status", "Endpoint", "Content-Type"],
             rows=api_rows,
             alignments=['<', '<', '<'],
-            title=f"Endpoints API descubiertos (top {len(api_rows)} de {len(api_endpoints)}):",
+            title=f"Endpoints API descubiertos {_count_label(len(api_endpoints), len(api_rows))}:",
         )
 
     # 8. Usuarios y emails
@@ -4544,7 +4556,7 @@ def print_final_summary(target):
             headers=["Severidad", "Template", "Nombre", "URL"],
             rows=rel_rows,
             alignments=['<', '<', '<', '<'],
-            title=f"Hallazgos Nuclei relevantes (top {len(rel_rows)} de {len(relevant_nuclei)}):",
+            title=f"Hallazgos Nuclei relevantes {_count_label(len(relevant_nuclei), len(rel_rows))}:",
         )
 
     # 12. Hallazgos clasificados (FINDINGS)
@@ -4579,7 +4591,7 @@ def print_final_summary(target):
             headers=["Categoría", "Detalle"],
             rows=find_rows,
             alignments=['<', '<'],
-            title=f"Detalle de hallazgos (primeros {len(find_rows)} de {len(FINDINGS)}):",
+            title=f"Detalle de hallazgos {_count_label(len(FINDINGS), len(find_rows))}:",
         )
 
     print()
@@ -4711,7 +4723,7 @@ def main():
                 run_user_enum_bruteforce(TARGET_URL, session)
             elif option == '10':
                 run_full_pentest(TARGET_URL, session)
-            elif option == '12':
+            elif option == '11':
                 if not _has_scan_data():
                     print_warning("Aún no hay datos. Ejecuta primero algún módulo o el pentesting completo.")
                 else:
@@ -4730,7 +4742,12 @@ def main():
                     print(md)
                     print("=" * 70)
                     print_good("Fin del markdown. Copia el bloque anterior.")
-            elif option == '11':
+            elif option == '12':
+                if not _has_scan_data():
+                    print_warning("Aún no hay datos. Ejecuta primero algún módulo o el pentesting completo.")
+                else:
+                    print_final_summary(TARGET_URL)
+            elif option == '13':
                 _exit_gracefully()
             else:
                 print_error("Opción no válida. Intenta de nuevo.")

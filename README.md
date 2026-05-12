@@ -51,9 +51,10 @@ Diseñada para security researchers y pentesters, automatiza tareas comunes de r
 - 🔍 Fuzzing rápido de directorios con **ffuf** (pre-filtrado de wordlist + baseline anti-falsos positivos)
 - 💉 Pruebas de inyección avanzadas (SQLi, XSS, LFI, RCE, Open Redirect)
 - 🔌 Detección y testing de APIs (IDOR, Mass Assignment, GraphQL, JWT, CORS)
+- 🌐 **Fuzzing de subdominios (vhost)** con `ffuf` y baseline `Content-Length`
 - 👤 Enumeración de usuarios y emails
-- 🔐 Fuerza bruta con **hydra** + fallback CSRF-aware
-- 📊 Reportes en **TXT, JSON y HTML** (con tema light/dark, hallazgos agrupados por categoría)
+- 🔐 Fuerza bruta con **hydra** + fallback CSRF-aware y **autodetección del mensaje de error**
+- 📊 Reportes en **TXT, JSON, HTML y Markdown** (con tema light/dark, hallazgos agrupados por categoría)
 
 ---
 
@@ -81,7 +82,14 @@ Diseñada para security researchers y pentesters, automatiza tareas comunes de r
 - Manejo robusto de redirecciones (`TooManyRedirects` no aborta la fase)
 - Resultados reutilizados por las pruebas de inyección
 
-### 🔀 Fuzzing & Enumeración
+### 🌐 Fuzzing de Subdominios (VHost)
+- **Detección de vhosts** con `ffuf` enviando `Host: FUZZ.<dominio>`
+- **Baseline por Content-Length** – envía un Host inválido (`defnotvalid<rnd>.<dominio>`) para obtener el tamaño base y filtrar con `-fs` todas las respuestas que coincidan
+- **Autodetección del dominio base** si el target es un FQDN; pide manual si es una IP
+- Wordlist por defecto: `Discovery/DNS/namelist.txt` (SecLists)
+- Fallback a método interno multihilo si no hay `ffuf`
+
+### 🔀 Fuzzing de Directorios & Enumeración
 - **Fuzzing de directorios** con `ffuf` (ultra-rápido) o método interno multihilo
 - **Pre-filtrado de wordlist** – descarta comentarios (`#`), líneas vacías y entradas con espacios
 - **Filtro `-fs` por baseline** – descarta páginas-comodín (apps que devuelven 200 con el index para cualquier ruta)
@@ -112,6 +120,8 @@ Diseñada para security researchers y pentesters, automatiza tareas comunes de r
 - **Fuerza bruta de contraseñas** – Soporta POST forms y Basic Auth
 - **Integración con `hydra`** (`-t 4 -I -u` para fiabilidad y deduplicación)
 - **Fallback CSRF-aware** al método interno con `requests.Session` (mantiene cookies y hidden fields)
+- **Autodetección del mensaje de error de login** – Envía credenciales imposibles, extrae frases candidatas del HTML y las propone para confirmar
+- **Heurística estricta** (≥2 señales positivas) cuando no hay mensaje de error confirmado, para evitar falsos positivos
 - Wordlists personalizables, soporta SecLists
 
 ### 🔐 Autenticación
@@ -225,42 +235,50 @@ python3 wstg-scan.py
 ## 📋 Menú Principal
 
 ```
-┌─ WSTG SCANNER v1.2 ─────────────────────────┐
-│                                              │
-│  1. Configurar autenticación (login)         │
-│  2. Información general y enumeración        │
-│  3. Análisis de vulnerabilidades con Nuclei  │
-│  4. Fuzzing de directorios (ffuf)            │
-│  5. Spidering / Mapeo completo del sitio     │
-│  6. Pruebas de inyección (SQLi, XSS, LFI…)   │
-│  7. Pruebas de API (IDOR, Mass Assignment…)  │
-│  8. Enumeración de usuarios + bruteforce     │
-│  9. PENTESTING COMPLETO (todas las pruebas)  │
-│ 10. Salir                                    │
-│                                              │
-└──────────────────────────────────────────────┘
+┌─ WSTG SCANNER v1.2 ──────────────────────────────┐
+│                                                   │
+│  1. Configurar autenticación (login)              │
+│  2. Información general y enumeración             │
+│  3. Análisis de vulnerabilidades con Nuclei       │
+│  4. Fuzzing de subdominios (vhost) con ffuf       │
+│  5. Fuzzing de directorios (ffuf)                 │
+│  6. Spidering / Mapeo completo del sitio          │
+│  7. Pruebas de inyección (SQLi, XSS, LFI…)        │
+│  8. Pruebas de API (IDOR, Mass Assignment…)       │
+│  9. Enumeración de usuarios + bruteforce          │
+│ 10. PENTESTING COMPLETO (todas las pruebas)       │
+│ 11. Mostrar resumen en Markdown   *               │
+│ 12. Mostrar tablas de resultados  *               │
+│ 13. Salir                                         │
+│                                                   │
+│  * solo aparecen tras ejecutar algún módulo       │
+└───────────────────────────────────────────────────┘
 ```
 
-> La opción **9** ejecuta secuencialmente: información → Nuclei → fuzzing → spidering → inyección → API → bruteforce. Al salir, se ofrece guardar el reporte.
+> La opción **10** ejecuta secuencialmente: información → Nuclei → **vhost** → fuzzing dirs → spidering → inyección → API → bruteforce, y muestra al final el resumen visual con todas las tablas. Al salir, se ofrece guardar el reporte.
+>
+> Las opciones **11** y **12** sirven para revisar el resumen tras un escaneo: la 11 imprime todo en Markdown (listo para pegar en GitBook/GitHub) y la 12 reimprime las tablas con el formato visual box-drawing.
 
 ---
 
 ## 📊 Reportes
 
-Los reportes se generan automáticamente en `reports/<host>/` con tres formatos:
+Los reportes se generan automáticamente en `reports/<host>/<host>.{txt,json,html,md}` con cuatro formatos:
 
 | Formato | Contenido |
 |---|---|
-| `*.txt` | Resumen plano + secciones por categoría (general, spider, API, directorios, credenciales, hallazgos, Nuclei) |
+| `*.txt` | Resumen plano + secciones por categoría (general, vhost, spider, API, directorios, credenciales, hallazgos, Nuclei) |
 | `*.json` | Datos serializados completos (ideal para integración con otras herramientas) |
 | `*.html` | Reporte visual con tema **light/dark**, hallazgos agrupados por categoría, tabla detallada de Nuclei, tecnologías como chips |
+| `*.md`  | Resumen completo en **Markdown** estándar — copia/pega directo en GitBook, GitHub o Obsidian |
 
 ### Estructura del reporte HTML
-- **Resumen** – KPIs (hallazgos, tecnologías, endpoints, directorios, usuarios, credenciales)
+- **Resumen** – KPIs (hallazgos, tecnologías, endpoints, vhosts, directorios, usuarios, credenciales)
 - **Información general** – Server, status, tecnologías (chips), usuarios y emails
-- **Hallazgos** – Agrupados en bloques colapsables por categoría (Vulnerabilidades / Nuclei por severidad / Directorios / etc.)
+- **Hallazgos** – Agrupados en bloques colapsables por categoría (Vulnerabilidades / Nuclei por severidad / Subdominios / Directorios / etc.)
 - **Análisis Nuclei** – Resumen por severidad + tabla detallada (sin duplicados)
 - **Endpoints API descubiertos** – Tabla con status/endpoint/URL/content-type
+- **Subdominios (vhosts) descubiertos** – Tabla con status/fqdn/tamaño
 - **Directorios encontrados** – Tabla con status/URL/tamaño
 - **Credenciales válidas** – Si el bruteforce tuvo éxito
 - **Spidering** – Muestra de URLs descubiertas
