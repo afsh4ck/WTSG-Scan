@@ -164,7 +164,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 # Ejecutar
-python3 wstg-scanner.py
+python3 wstg-scan.py
 ```
 
 ### 2️⃣ Instalación con herramientas opcionales (recomendado para máxima cobertura)
@@ -198,7 +198,7 @@ Se pedirá la URL objetivo y se mostrará el menú principal.
 ### Modo argumentos CLI
 
 ```bash
-python3 wstg-scan.py --url https://example.com --output report.txt --threads 10 --timeout 15
+python3 wstg-scan.py --url https://example.com --output report.html --threads 10 --timeout 15
 ```
 
 | Argumento | Descripción |

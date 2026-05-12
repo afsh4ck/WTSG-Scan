@@ -1440,7 +1440,7 @@ def _build_html_report(report_data):
 <head>
     <meta charset=\"utf-8\">
     <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
-    <title>WSTG Report - {{_html_escape(report_data.get('target', ''))}}</title>
+    <title>WSTG Report - {_html_escape(report_data.get('target', ''))}</title>
     <style>
         :root {{
             --bg:#f5f7fb; --panel:#ffffff; --text:#0b1320; --muted:#5c687a; --border:#d8deea;
@@ -1523,7 +1523,7 @@ def _build_html_report(report_data):
             <p><b>Emails:</b><br>{emails_html}</p>
         </div>
 
-        <div class="card" id='hallazgos'><h3>Hallazgos</h3><ul>{findings_items}</ul></div>
+        <div class="card" id='hallazgos'><h3>Hallazgos</h3>{findings_items}</div>
         {nuclei_html}
 
         <div class="card" id='api'>
@@ -2904,7 +2904,11 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
             print_warning("hydra no está instalado o no está en PATH. Usando método interno.")
 
         login_url = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Introduce la URL real del login (dejar vacío para autodetección): ").strip()
-        error_msg = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Introduce el mensaje de error exacto (vacío para heurística): ").strip()
+        print_info("El mensaje de error de login mejora MUCHO la precisión (evita falsos positivos).")
+        print_info("Si lo dejas vacío, se intentará autodetectar enviando credenciales imposibles.")
+        error_msg = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Mensaje de error exacto de login fallido (vacío = autodetectar): ").strip()
+        # Flag para endurecer la heurística cuando no haya error_msg ni candidatos autodetectados
+        strict_heuristic = False
 
         # Si no se especifica, autodetectar como antes
         login_forms_map = {}
@@ -3016,6 +3020,75 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
             f"Usando formulario principal: {primary_form['url']} "
             f"({primary_form['user_field']}/{primary_form['pass_field']})"
         )
+
+        # --- Autodetección del mensaje de error de login ---
+        if not error_msg:
+            print_info("Autodetectando mensaje de error con credenciales imposibles...")
+            ERROR_KEYWORDS = [
+                'invalid', 'incorrect', 'wrong', 'failed', 'error', 'denied', 'bad credentials',
+                'authentication', 'unauthorized', 'forbidden', 'try again',
+                'inválido', 'invalido', 'incorrecto', 'incorrecta', 'denegado',
+                'no encontrado', 'usuario o contrase', 'contraseña incorrecta',
+                'fallo', 'falló', 'intentar de nuevo', 'no válido', 'no valido',
+            ]
+            candidates = []
+            try:
+                _probe_payload = {}
+                _probe_payload.update(primary_form.get('hidden_fields', {}))
+                _probe_payload[primary_form['user_field']] = "__wstg_x7z9q__"
+                _probe_payload[primary_form['pass_field']] = "__wstg_x7z9q__"
+                _probe_resp = session.post(
+                    primary_form['url'], data=_probe_payload,
+                    timeout=DEFAULT_TIMEOUT, allow_redirects=True
+                )
+                _probe_text = _probe_resp.text
+                if HAS_BS4:
+                    try:
+                        _probe_soup = BeautifulSoup(_probe_text, 'html.parser')
+                        for _t in _probe_soup(['script', 'style', 'noscript']):
+                            _t.decompose()
+                        _probe_text = _probe_soup.get_text(separator='\n')
+                    except Exception:
+                        pass
+                _seen = set()
+                for _raw in _probe_text.splitlines():
+                    _line = re.sub(r'\s+', ' ', _raw).strip()
+                    if not _line or len(_line) < 5 or len(_line) > 200:
+                        continue
+                    _low = _line.lower()
+                    if any(k in _low for k in ERROR_KEYWORDS):
+                        if _line not in _seen:
+                            _seen.add(_line)
+                            candidates.append(_line)
+                    if len(candidates) >= 10:
+                        break
+            except Exception as e:
+                print_warning(f"No se pudo autodetectar mensaje de error: {e}")
+
+            if candidates:
+                print_good(f"Candidatos de mensaje de error detectados ({len(candidates)}):")
+                for i, c in enumerate(candidates, 1):
+                    print(f"  {Fore.YELLOW}{i}{Style.RESET_ALL}. {c}")
+                choice = input(
+                    f"{Fore.YELLOW}[?]{Style.RESET_ALL} Elige número [1-{len(candidates)}] "
+                    f"(Enter = #1, 'n' = ninguno / heurística estricta): "
+                ).strip().lower()
+                if choice == 'n':
+                    strict_heuristic = True
+                    print_warning("Sin mensaje de error: se aplicará heurística estricta (menos falsos positivos).")
+                else:
+                    try:
+                        idx = int(choice) - 1 if choice else 0
+                        if 0 <= idx < len(candidates):
+                            error_msg = candidates[idx]
+                        else:
+                            error_msg = candidates[0]
+                    except ValueError:
+                        error_msg = candidates[0]
+                    print_good(f"Mensaje de error seleccionado: '{error_msg}'")
+            else:
+                strict_heuristic = True
+                print_warning("No se detectaron candidatos. Se aplicará heurística estricta.")
 
         # Cargar lista de contraseñas
         passwords = DEFAULT_PASSWORDS
@@ -3194,26 +3267,47 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
             body = resp_follow.text.lower()
             final_path = _normalize_path(resp_follow.url)
             final_len = len(resp_follow.content)
-            if error_msg and error_msg in body:
+            if error_msg and error_msg.lower() in body:
                 return False
             if any(k in body for k in FAILURE_KEYWORDS):
                 return False
-            if _is_login_path(final_path):
-                if fail_max > 0 and (final_len < fail_min or final_len > fail_max):
-                    return True
-                return False
-            if any(k in body for k in SUCCESS_KEYWORDS):
-                return True
-            if baseline_status != -1 and resp_follow.status_code != baseline_status and final_path != baseline_path:
-                return True
+
+            # Señales positivas independientes
+            has_success_kw = any(k in body for k in SUCCESS_KEYWORDS)
+            status_changed = (baseline_status != -1
+                              and resp_follow.status_code != baseline_status
+                              and final_path != baseline_path)
             location = resp_no_redirect.headers.get('Location', '')
             location_path = _normalize_path(urljoin(primary_form['url'], location)) if location else ''
-            if resp_no_redirect.status_code in (301, 302, 303, 307, 308):
-                if location and not _is_login_path(location_path):
+            redirect_off_login = (
+                resp_no_redirect.status_code in (301, 302, 303, 307, 308)
+                and location and not _is_login_path(location_path)
+            )
+            size_outlier = fail_max > 0 and (final_len < fail_min or final_len > fail_max)
+            path_left_login = final_path != baseline_path and not _is_login_path(final_path)
+
+            # Modo estricto (sin error_msg): exige ≥2 señales positivas distintas
+            # o al menos una señal "fuerte" (keyword de éxito + cambio de path/status).
+            if strict_heuristic:
+                strong = has_success_kw and (status_changed or path_left_login or redirect_off_login)
+                signals = sum([has_success_kw, status_changed, redirect_off_login,
+                               size_outlier, path_left_login])
+                return strong or signals >= 2
+
+            # Heurística normal (cuando tenemos error_msg confirmado)
+            if _is_login_path(final_path):
+                if size_outlier:
                     return True
-            if fail_max > 0 and (final_len < fail_min or final_len > fail_max):
+                return False
+            if has_success_kw:
                 return True
-            if final_path != baseline_path and not _is_login_path(final_path):
+            if status_changed:
+                return True
+            if redirect_off_login:
+                return True
+            if size_outlier:
+                return True
+            if path_left_login:
                 return True
             return False
 
@@ -3669,6 +3763,21 @@ def print_final_summary(target):
         text = str(value) if value is not None else "-"
         return text if len(text) <= width else text[: width - 3] + "..."
 
+    def _stringify(item):
+        """Convierte un item (str/dict/otro) a una cadena legible."""
+        if isinstance(item, str):
+            return item
+        if isinstance(item, dict):
+            name = item.get("name") or item.get("template_id") or item.get("url") or ""
+            detail = item.get("detail") or item.get("value") or ""
+            if name and detail:
+                return f"{name} ({detail})"
+            return name or detail or str(item)
+        return str(item)
+
+    def _join_safe(items, sep=", "):
+        return sep.join(_stringify(i) for i in (items or []))
+
     print_phase("RESUMEN FINAL DEL PENTESTING")
 
     general = SCAN_DATA.get("general") or {}
@@ -3689,7 +3798,7 @@ def print_final_summary(target):
         ["Objetivo", _trim(target, 90)],
         ["Status HTTP", str(general.get("status_code", "-"))],
         ["Servidor", _trim(general.get("server", "-"), 90)],
-        ["Tecnologías", _trim(", ".join(general.get("technologies", [])) or "-", 90)],
+        ["Tecnologías", _trim(_join_safe(general.get("technologies", [])) or "-", 90)],
         ["Hallazgos (FINDINGS)", str(len(FINDINGS))],
         ["Vulnerabilidades Nuclei", str(len(nuclei_findings))],
         ["URLs spider", str(spider.get("total_urls", 0))],
@@ -3740,9 +3849,9 @@ def print_final_summary(target):
     # 4. HTTP methods + robots
     misc_rows = []
     if http_methods:
-        misc_rows.append(["HTTP Methods permitidos", _trim(", ".join(http_methods), 90)])
+        misc_rows.append(["HTTP Methods permitidos", _trim(_join_safe(http_methods), 90)])
     if robots_paths:
-        misc_rows.append([f"Rutas de robots.txt/sitemap ({len(robots_paths)})", _trim(", ".join(robots_paths[:15]), 90)])
+        misc_rows.append([f"Rutas de robots.txt/sitemap ({len(robots_paths)})", _trim(_join_safe(robots_paths[:15]), 90)])
     if misc_rows:
         print_table(
             headers=["Categoría", "Valor"],
@@ -3809,9 +3918,9 @@ def print_final_summary(target):
     if users or emails:
         ue_rows = []
         if users:
-            ue_rows.append(["Usuarios", _trim(", ".join(users), 100)])
+            ue_rows.append(["Usuarios", _trim(_join_safe(users), 100)])
         if emails:
-            ue_rows.append(["Emails", _trim(", ".join(emails), 100)])
+            ue_rows.append(["Emails", _trim(_join_safe(emails), 100)])
         print_table(
             headers=["Categoría", "Valores"],
             rows=ue_rows,
@@ -3855,7 +3964,7 @@ def print_final_summary(target):
         for sev in sorted(nuclei_summary.keys(), key=lambda s: SEV_ORDER.get(s, 99)):
             tids = nuclei_summary[sev]
             color = SEV_COLOR.get(sev, Fore.WHITE)
-            unique_str = ", ".join(sorted(set(tids)))
+            unique_str = _join_safe(sorted(set(tids)))
             sum_rows.append([
                 f"{color}{sev.upper()}{Style.RESET_ALL}",
                 str(len(tids)),
