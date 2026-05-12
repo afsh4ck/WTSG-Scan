@@ -1,4 +1,4 @@
-# 🔐 OWASP WSTG Security Scanner
+# 🔐 WSTG-Scan
 
 <div align="center">
 
@@ -7,7 +7,8 @@
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen.svg)
 ![Platform](https://img.shields.io/badge/Platform-Kali%20Linux-lightgrey.svg)
 
-**Herramienta interactiva y completa de pruebas de seguridad web** basada en la metodología OWASP WSTG.
+
+**WSTG-Scan** es una herramienta interactiva y completa de pruebas de seguridad web basada en la metodología OWASP WSTG.
 
 [Características](#-características) • [Instalación](#-instalación) • [Uso](#-uso-rápido) • [Reportes](#-reportes) • [Contribuir](#-contribuciones)
 
@@ -38,7 +39,8 @@
 
 ## 📝 Descripción
 
-**WSTG Scanner** es una herramienta de pentesting web **interactiva y comprehensiva** que implementa las mejores prácticas del [OWASP Web Security Testing Guide](https://owasp.org/www-project-web-security-testing-guide/) y el [OWASP API Top 10](https://owasp.org/API-Security/).
+
+**WSTG-Scan** es una herramienta de pentesting web **interactiva y comprehensiva** que implementa las mejores prácticas del [OWASP Web Security Testing Guide](https://owasp.org/www-project-web-security-testing-guide/) y el [OWASP API Top 10](https://owasp.org/API-Security/).
 
 Diseñada para security researchers y pentesters, automatiza tareas comunes de reconocimiento, análisis y testing:
 - 🕷️ Mapeo completo y exhaustivo de aplicaciones web (spidering con detección de formularios e inputs)
@@ -52,7 +54,7 @@ Diseñada para security researchers y pentesters, automatiza tareas comunes de r
 
 ---
 
-## ⭐ Características
+## ⭐ Características principales de WSTG-Scan
 
 ### 🔎 Reconocimiento
 - **Información general** – Server, headers, cookies, SSL/TLS, métodos HTTP, robots.txt / sitemap.xml
