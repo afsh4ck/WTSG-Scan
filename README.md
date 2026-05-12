@@ -60,6 +60,11 @@ Diseñada para security researchers y pentesters, automatiza tareas comunes de r
 
 ## ⭐ Características
 
+### 🔐 Autenticación
+- **Pre-autenticación** – Login automático con credenciales (Basic Auth o formulario)
+- **Sesión persistente** – Todas las pruebas posteriores usan la sesión autenticada
+- Manejo de cookies y campos hidden (CSRF tokens)
+
 ### 🔎 Reconocimiento
 - **Información general** – Server, headers, cookies, SSL/TLS, métodos HTTP, robots.txt / sitemap.xml
 - **Detección de tecnologías** – Integración con `whatweb` (auto-instalación) con fallback por cabeceras
@@ -123,11 +128,6 @@ Diseñada para security researchers y pentesters, automatiza tareas comunes de r
 - **Autodetección del mensaje de error de login** – Envía credenciales imposibles, extrae frases candidatas del HTML y las propone para confirmar
 - **Heurística estricta** (≥2 señales positivas) cuando no hay mensaje de error confirmado, para evitar falsos positivos
 - Wordlists personalizables, soporta SecLists
-
-### 🔐 Autenticación
-- **Pre-autenticación** – Login automático con credenciales (Basic Auth o formulario)
-- **Sesión persistente** – Todas las pruebas posteriores usan la sesión autenticada
-- Manejo de cookies y campos hidden (CSRF tokens)
 
 ### 🎨 Experiencia de Usuario
 - **Menú interactivo** con autocompletado de rutas (Tab) en Kali
