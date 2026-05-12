@@ -1220,7 +1220,7 @@ def _default_report_txt_name(target_url):
     return f"{_safe_filename_from_url(target_url)}.txt"
 
 def _normalize_output_paths(output_file, target_url):
-    """Devuelve rutas estables para TXT/JSON/HTML. Siempre sobrescribe por objetivo."""
+    """Devuelve rutas estables para TXT/JSON/HTML/MD. Siempre sobrescribe por objetivo."""
     # Carpeta base de reportes
     reports_dir = os.path.join(os.getcwd(), "reports")
     # Nombre de subcarpeta por host/url
@@ -1233,7 +1233,7 @@ def _normalize_output_paths(output_file, target_url):
     if not ext:
         txt_file = txt_file + ".txt"
         base = txt_file[:-4]
-    return txt_file, base + ".json", base + ".html"
+    return txt_file, base + ".json", base + ".html", base + ".md"
 
 def _to_serializable(value):
     """Convierte objetos no serializables (cookies, sets, etc.) en tipos JSON simples."""
@@ -1574,9 +1574,256 @@ def _build_html_report(report_data):
 </html>
 """
 
+def _md_escape_cell(value):
+    """Escapa el contenido de una celda de tabla markdown."""
+    text = str(value) if value is not None else ""
+    # Sin saltos de línea ni pipes literales
+    text = text.replace('\r', ' ').replace('\n', '<br>')
+    text = text.replace('|', '\\|')
+    return text or "-"
+
+def _md_table(headers, rows):
+    """Genera una tabla markdown estándar (con escape de pipes y saltos)."""
+    if not headers:
+        return ""
+    header_line = "| " + " | ".join(_md_escape_cell(h) for h in headers) + " |"
+    sep_line = "| " + " | ".join("---" for _ in headers) + " |"
+    lines = [header_line, sep_line]
+    for r in rows:
+        cells = [_md_escape_cell(r[i] if i < len(r) else "") for i in range(len(headers))]
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+def _build_markdown_report(report_data):
+    """Construye el resumen completo del pentest en markdown (compatible GitBook/GitHub)."""
+    scan_data = report_data.get("scan_data", {}) or {}
+    findings = report_data.get("findings", []) or []
+    target = report_data.get("target", "")
+    date = report_data.get("date", "")
+
+    general = scan_data.get("general", {}) or {}
+    nuclei_summary = scan_data.get("nuclei_summary", {}) or {}
+    nuclei_findings_list = scan_data.get("nuclei_findings", []) or []
+    spider = scan_data.get("spider", {}) or {}
+    injection = scan_data.get("injection", {}) or {}
+    dir_hits = scan_data.get("directory_hits", []) or []
+    api_endpoints = scan_data.get("api_endpoints", []) or []
+    users = scan_data.get("users", []) or []
+    emails = scan_data.get("emails", []) or []
+    creds = scan_data.get("bruteforce_credentials", []) or []
+    robots_paths = scan_data.get("robots_paths", []) or []
+    http_methods = scan_data.get("http_methods", []) or []
+
+    def _tech_str(item):
+        if isinstance(item, dict):
+            name = str(item.get("name", "")).strip()
+            detail = str(item.get("detail", "")).strip()
+            return f"{name} ({detail})" if name and detail else (name or detail or "")
+        return str(item)
+
+    SEV_ORDER = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4, 'unknown': 5}
+
+    parts = []
+    parts.append(f"# OWASP WSTG Scanner — Reporte de Pentesting")
+    parts.append("")
+    parts.append(f"- **Objetivo:** `{target}`")
+    parts.append(f"- **Fecha:** {date}")
+    parts.append(f"- **Herramienta:** WSTG Scanner v{report_data.get('tool', '')}")
+    parts.append("")
+
+    # 1. Resumen ejecutivo
+    parts.append("## Resumen ejecutivo")
+    parts.append("")
+    techs = general.get("technologies", []) or []
+    tech_str = ", ".join(_tech_str(t) for t in techs) or "-"
+    overview_rows = [
+        ["Status HTTP", str(general.get("status_code", "-"))],
+        ["Servidor", str(general.get("server", "-"))],
+        ["Tecnologías", tech_str],
+        ["Hallazgos (FINDINGS)", str(len(findings))],
+        ["Vulnerabilidades Nuclei", str(len(nuclei_findings_list))],
+        ["URLs spider", str(spider.get("total_urls", 0))],
+        ["Directorios encontrados", str(len(dir_hits))],
+        ["Endpoints API", str(len(api_endpoints))],
+        ["Usuarios", str(len(users))],
+        ["Emails", str(len(emails))],
+        ["Credenciales válidas", str(len(creds))],
+    ]
+    parts.append(_md_table(["Campo", "Valor"], overview_rows))
+    parts.append("")
+
+    # 2. Cabeceras de seguridad
+    sec_header_names = [
+        "Strict-Transport-Security", "Content-Security-Policy",
+        "X-Frame-Options", "X-Content-Type-Options",
+        "Referrer-Policy", "Permissions-Policy",
+    ]
+    headers = (general.get("headers") or {})
+    sec_rows = []
+    for h in sec_header_names:
+        v = headers.get(h) or headers.get(h.lower()) or "-"
+        present = v != "-"
+        sec_rows.append([h, "OK" if present else "AUSENTE", v])
+    parts.append("## Cabeceras de seguridad")
+    parts.append("")
+    parts.append(_md_table(["Header", "Estado", "Valor"], sec_rows))
+    parts.append("")
+
+    # 3. Cookies
+    cookies = general.get("cookies") or []
+    if cookies:
+        parts.append("## Cookies detectadas")
+        parts.append("")
+        parts.append(_md_table(["Cookie"], [[c] for c in cookies]))
+        parts.append("")
+
+    # 4. HTTP methods + robots
+    misc_rows = []
+    if http_methods:
+        misc_rows.append(["HTTP Methods permitidos", ", ".join(http_methods)])
+    if robots_paths:
+        misc_rows.append([f"Rutas robots/sitemap ({len(robots_paths)})", ", ".join(robots_paths[:15])])
+    if misc_rows:
+        parts.append("## Información HTTP adicional")
+        parts.append("")
+        parts.append(_md_table(["Categoría", "Valor"], misc_rows))
+        parts.append("")
+
+    # 5. Spider
+    if spider:
+        parts.append("## Spidering")
+        parts.append("")
+        spider_rows = [
+            ["URLs totales", str(spider.get("total_urls", 0))],
+            ["Parámetros únicos", str(spider.get("total_params", 0))],
+            ["Formularios", str(spider.get("total_forms", 0))],
+        ]
+        parts.append(_md_table(["Métrica", "Valor"], spider_rows))
+        parts.append("")
+        sample_urls = spider.get("sample_urls") or []
+        if sample_urls:
+            parts.append(f"### Muestra de URLs descubiertas (top {min(30, len(sample_urls))} de {spider.get('total_urls', 0)})")
+            parts.append("")
+            parts.append(_md_table(["URL"], [[u] for u in sample_urls[:30]]))
+            parts.append("")
+
+    # 6. Directorios
+    if dir_hits:
+        parts.append(f"## Directorios encontrados (top 50 de {len(dir_hits)})")
+        parts.append("")
+        rows = [[str(h.get("status", "-")), str(h.get("url", "-")), str(h.get("size", "-"))]
+                for h in dir_hits[:50]]
+        parts.append(_md_table(["Status", "URL", "Tamaño"], rows))
+        parts.append("")
+
+    # 7. API endpoints
+    if api_endpoints:
+        parts.append(f"## Endpoints API descubiertos (top 50 de {len(api_endpoints)})")
+        parts.append("")
+        rows = [[str(ep.get("status", "-")),
+                 str(ep.get("endpoint") or ep.get("url", "-")),
+                 str(ep.get("content_type", "-"))]
+                for ep in api_endpoints[:50]]
+        parts.append(_md_table(["Status", "Endpoint", "Content-Type"], rows))
+        parts.append("")
+
+    # 8. Usuarios y emails
+    if users or emails:
+        parts.append("## Usuarios y emails descubiertos")
+        parts.append("")
+        ue_rows = []
+        if users:
+            ue_rows.append(["Usuarios", ", ".join(users)])
+        if emails:
+            ue_rows.append(["Emails", ", ".join(emails)])
+        parts.append(_md_table(["Categoría", "Valores"], ue_rows))
+        parts.append("")
+
+    # 9. Inyección
+    if injection.get("executed"):
+        parts.append("## Pruebas de inyección")
+        parts.append("")
+        inj_rows = [
+            ["Formularios detectados", str(injection.get("forms_found", 0))],
+            ["Parámetros GET detectados", str(injection.get("url_params_found", 0))],
+            ["Parámetros GET probados", str(len(injection.get("tested_get_params", [])))],
+            ["Inputs de formulario probados", str(len(injection.get("tested_form_inputs", [])))],
+        ]
+        parts.append(_md_table(["Métrica", "Valor"], inj_rows))
+        parts.append("")
+
+    # 10. Credenciales válidas
+    if creds:
+        parts.append("## Credenciales válidas encontradas")
+        parts.append("")
+        rows = []
+        for c in creds:
+            user = c.get("username") if isinstance(c, dict) else str(c)
+            pwd = c.get("password") if isinstance(c, dict) else "-"
+            rows.append([str(user), str(pwd)])
+        parts.append(_md_table(["Usuario", "Contraseña"], rows))
+        parts.append("")
+
+    # 11. Nuclei
+    if nuclei_summary:
+        parts.append("## Vulnerabilidades por severidad (Nuclei)")
+        parts.append("")
+        rows = []
+        for sev in sorted(nuclei_summary.keys(), key=lambda s: SEV_ORDER.get(s, 99)):
+            tids = nuclei_summary[sev]
+            rows.append([sev.upper(), str(len(tids)), ", ".join(sorted(set(map(str, tids))))])
+        parts.append(_md_table(["Severidad", "Cantidad", "Templates únicos"], rows))
+        parts.append("")
+
+    relevant_nuclei = [n for n in nuclei_findings_list
+                       if (n.get('severity') or '').lower() in ('critical', 'high', 'medium', 'low')]
+    if relevant_nuclei:
+        sorted_rel = sorted(relevant_nuclei,
+                            key=lambda x: (SEV_ORDER.get((x.get('severity') or 'unknown').lower(), 99),
+                                           str(x.get('template_id', ''))))
+        parts.append(f"## Hallazgos Nuclei relevantes (top 100 de {len(sorted_rel)})")
+        parts.append("")
+        rows = [[(n.get('severity') or '').upper(),
+                 str(n.get('template_id', '-')),
+                 str(n.get('name', '-')),
+                 str(n.get('url', '-'))]
+                for n in sorted_rel[:100]]
+        parts.append(_md_table(["Severidad", "Template", "Nombre", "URL"], rows))
+        parts.append("")
+
+    # 12. Hallazgos clasificados (FINDINGS)
+    if findings:
+        cats = {}
+        for f in findings:
+            m = re.match(r'^\[([^\]]+)\]', str(f))
+            cat = m.group(1) if m else "OTROS"
+            cats.setdefault(cat, []).append(str(f))
+        parts.append(f"## Hallazgos clasificados (total: {len(findings)})")
+        parts.append("")
+        cat_rows = [[cat, str(len(cats[cat]))] for cat in sorted(cats.keys())]
+        parts.append(_md_table(["Categoría", "Cantidad"], cat_rows))
+        parts.append("")
+        parts.append("### Detalle de hallazgos")
+        parts.append("")
+        rows = []
+        for f in findings[:200]:
+            m = re.match(r'^\[([^\]]+)\]\s*(.*)', str(f))
+            if m:
+                rows.append([m.group(1), m.group(2)])
+            else:
+                rows.append(["OTROS", str(f)])
+        parts.append(_md_table(["Categoría", "Detalle"], rows))
+        parts.append("")
+
+    parts.append("---")
+    parts.append("")
+    parts.append("_Generado automáticamente por WSTG Scanner._")
+    return "\n".join(parts)
+
+
 def save_report(output_file=None):
-    """Guarda hallazgos y datos relevantes en TXT, JSON y HTML."""
-    txt_file, json_file, html_file = _normalize_output_paths(output_file, TARGET_URL)
+    """Guarda hallazgos y datos relevantes en TXT, JSON, HTML y MD."""
+    txt_file, json_file, html_file, md_file = _normalize_output_paths(output_file, TARGET_URL)
     scan_stats = {
         "authenticated": AUTHENTICATED,
         "threads": THREADS,
@@ -1703,8 +1950,13 @@ def save_report(output_file=None):
         with open(html_file, 'w', encoding='utf-8') as f:
             f.write(html_content)
 
+        md_content = _build_markdown_report(report_data)
+        with open(md_file, 'w', encoding='utf-8') as f:
+            f.write(md_content)
+
+        base_path = os.path.splitext(txt_file)[0]
         print_good(
-            f"Reportes guardados (sobrescritos si existían): {txt_file}, {json_file}, {html_file}"
+            f"Reportes guardados en {base_path}.{{txt,json,html,md}}"
         )
     except Exception as e:
         print_error(f"No se pudo guardar el reporte: {e}")
@@ -3536,6 +3788,21 @@ def spider_website(target, session, max_pages=500, max_depth=3, use_robots=True)
     return discovered_urls, all_params, forms_found
 
 # ========== MENÚ PRINCIPAL ==========
+def _has_scan_data():
+    """True si se ha ejecutado al menos un módulo y hay datos para reportar."""
+    return any([
+        bool(FINDINGS),
+        bool(SCAN_DATA.get("general")),
+        bool(SCAN_DATA.get("injection")),
+        bool(SCAN_DATA.get("api_endpoints")),
+        bool(SCAN_DATA.get("directory_hits")),
+        bool(SCAN_DATA.get("users")),
+        bool(SCAN_DATA.get("emails")),
+        bool(SCAN_DATA.get("bruteforce_credentials")),
+        bool(SCAN_DATA.get("spider")),
+        bool(SCAN_DATA.get("nuclei_findings")),
+    ])
+
 def show_menu():
     clear_screen()
     if HAS_COLOR:
@@ -3560,6 +3827,8 @@ def show_menu():
     print(" 7. Pruebas de API (descubrimiento, IDOR, mass assignment)")
     print(" 8. Enumeración de usuarios/emails y fuerza bruta de contraseñas")
     print(" 9. PENTESTING COMPLETO (ejecuta todas las pruebas anteriores)")
+    if _has_scan_data():
+        print("11. Mostrar resumen en Markdown")
     print("10. Salir")
     print("="*50)
 
@@ -4167,6 +4436,25 @@ def main():
                 run_user_enum_bruteforce(TARGET_URL, session)
             elif option == '9':
                 run_full_pentest(TARGET_URL, session)
+            elif option == '11':
+                if not _has_scan_data():
+                    print_warning("Aún no hay datos. Ejecuta primero algún módulo o el pentesting completo.")
+                else:
+                    report_data = {
+                        "tool": VERSION,
+                        "target": TARGET_URL,
+                        "date": time.strftime('%Y-%m-%d %H:%M:%S'),
+                        "findings": list(FINDINGS),
+                        "scan_data": _to_serializable(SCAN_DATA),
+                    }
+                    md = _build_markdown_report(report_data)
+                    print()
+                    print("=" * 70)
+                    print(" RESUMEN EN MARKDOWN (copia desde la línea siguiente):")
+                    print("=" * 70)
+                    print(md)
+                    print("=" * 70)
+                    print_good("Fin del markdown. Copia el bloque anterior.")
             elif option == '10':
                 _exit_gracefully()
             else:
