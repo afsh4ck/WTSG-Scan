@@ -119,6 +119,7 @@ SCAN_DATA = {
     "general": {},
     "robots_paths": [],
     "http_methods": [],
+    "vhosts": [],
     "directory_hits": [],
     "injection": {},
     "api_endpoints": [],
@@ -142,6 +143,7 @@ COMMON_DIRS = [
 SECLISTS_SMALL = "/usr/share/seclists/Discovery/Web-Content/raft-small-directories.txt"
 SECLISTS_MEDIUM = "/usr/share/seclists/Discovery/Web-Content/directory-list-lowercase-2.3-medium.txt"
 SECLISTS_PASSWORDS = "/usr/share/seclists/Passwords/xato-net-10-million-passwords-10000.txt"
+SECLISTS_DNS = "/usr/share/seclists/Discovery/DNS/namelist.txt"
 DEFAULT_PASSWORDS = [
     "123456", "password", "123456789", "12345", "12345678", "qwerty", "abc123", "admin", "letmein", "welcome"
 ]
@@ -594,6 +596,7 @@ SCAN_DATA = {
     "general": {},
     "robots_paths": [],
     "http_methods": [],
+    "vhosts": [],
     "directory_hits": [],
     "injection": {},
     "api_endpoints": [],
@@ -617,6 +620,7 @@ COMMON_DIRS = [
 SECLISTS_SMALL = "/usr/share/seclists/Discovery/Web-Content/raft-small-directories.txt"
 SECLISTS_MEDIUM = "/usr/share/seclists/Discovery/Web-Content/directory-list-lowercase-2.3-medium.txt"
 SECLISTS_PASSWORDS = "/usr/share/seclists/Passwords/xato-net-10-million-passwords-10000.txt"
+SECLISTS_DNS = "/usr/share/seclists/Discovery/DNS/namelist.txt"
 DEFAULT_PASSWORDS = [
     "123456", "password", "123456789", "12345", "12345678", "qwerty", "abc123", "admin", "letmein", "welcome"
 ]
@@ -1261,6 +1265,7 @@ def _build_html_report(report_data):
     users = scan_data.get("users", [])
     emails = scan_data.get("emails", [])
     endpoints = scan_data.get("api_endpoints", [])
+    vhosts_list = scan_data.get("vhosts", [])
     dirs = scan_data.get("directory_hits", [])
     creds = scan_data.get("bruteforce_credentials", [])
     spider = scan_data.get("spider", {})
@@ -1317,12 +1322,15 @@ def _build_html_report(report_data):
             return "Vulnerabilidades"
         if s.startswith('[DIR]'):
             return "Directorios / Endpoints"
+        if s.startswith('[VHOST]'):
+            return "Subdominios (vhosts)"
         return "Otros"
 
     CAT_ORDER = [
         "Vulnerabilidades",
         "Nuclei — CRITICAL", "Nuclei — HIGH", "Nuclei — MEDIUM",
         "Nuclei — LOW", "Nuclei — INFO", "Nuclei — UNKNOWN",
+        "Subdominios (vhosts)",
         "Directorios / Endpoints",
         "Otros",
     ]
@@ -1387,6 +1395,15 @@ def _build_html_report(report_data):
         for ep in endpoints[:300]
     ) or "<tr><td colspan='4'>Sin endpoints detectados.</td></tr>"
 
+    vhost_rows = "\n".join(
+        "<tr>"
+        f"<td>{_html_escape(v.get('status', ''))}</td>"
+        f"<td>{_html_escape(v.get('fqdn') or v.get('subdomain', ''))}</td>"
+        f"<td>{_html_escape(v.get('size', ''))}</td>"
+        "</tr>"
+        for v in vhosts_list[:300] if isinstance(v, dict)
+    ) or "<tr><td colspan='3'>Sin subdominios detectados.</td></tr>"
+
     dir_rows = ""
     if dirs:
         for hit in dirs[:500]:
@@ -1427,6 +1444,7 @@ def _build_html_report(report_data):
         ("Información general", "info"),
         ("Hallazgos", "hallazgos"),
         ("API", "api"),
+        ("Subdominios", "vhosts"),
         ("Directorios", "directorios"),
         ("Credenciales", "credenciales"),
         ("Spidering", "spidering"),
@@ -1507,6 +1525,7 @@ def _build_html_report(report_data):
                 <div><span class="muted">Hallazgos</span><b>{len(findings)}</b></div>
                 <div><span class="muted">Tecnologías</span><b>{len(technologies)}</b></div>
                 <div><span class="muted">API</span><b>{len(endpoints)}</b></div>
+                <div><span class="muted">VHosts</span><b>{len(vhosts_list)}</b></div>
                 <div><span class="muted">Directorios</span><b>{len(dirs)}</b></div>
                 <div><span class="muted">Usuarios</span><b>{len(users)}</b></div>
                 <div><span class="muted">Credenciales</span><b>{len(creds)}</b></div>
@@ -1529,6 +1548,11 @@ def _build_html_report(report_data):
         <div class="card" id='api'>
             <h3>Endpoints API detectados</h3>
             <table><thead><tr><th>Status</th><th>Endpoint</th><th>URL</th><th>Content-Type</th></tr></thead><tbody>{endpoint_rows}</tbody></table>
+        </div>
+
+        <div class=\"card\" id='vhosts'>
+            <h3>Subdominios (vhosts) descubiertos</h3>
+            <table><thead><tr><th>Status</th><th>VHost</th><th>Tamaño</th></tr></thead><tbody>{vhost_rows}</tbody></table>
         </div>
 
         <div class=\"card\" id='directorios'>
@@ -1606,6 +1630,7 @@ def _build_markdown_report(report_data):
     nuclei_findings_list = scan_data.get("nuclei_findings", []) or []
     spider = scan_data.get("spider", {}) or {}
     injection = scan_data.get("injection", {}) or {}
+    vhosts = scan_data.get("vhosts", []) or []
     dir_hits = scan_data.get("directory_hits", []) or []
     api_endpoints = scan_data.get("api_endpoints", []) or []
     users = scan_data.get("users", []) or []
@@ -1643,6 +1668,7 @@ def _build_markdown_report(report_data):
         ["Hallazgos (FINDINGS)", str(len(findings))],
         ["Vulnerabilidades Nuclei", str(len(nuclei_findings_list))],
         ["URLs spider", str(spider.get("total_urls", 0))],
+        ["Subdominios (vhosts)", str(len(vhosts))],
         ["Directorios encontrados", str(len(dir_hits))],
         ["Endpoints API", str(len(api_endpoints))],
         ["Usuarios", str(len(users))],
@@ -1707,7 +1733,18 @@ def _build_markdown_report(report_data):
             parts.append(_md_table(["URL"], [[u] for u in sample_urls[:30]]))
             parts.append("")
 
-    # 6. Directorios
+    # 6a. Subdominios (vhosts)
+    if vhosts:
+        parts.append(f"## Subdominios (vhosts) encontrados (top 50 de {len(vhosts)})")
+        parts.append("")
+        rows = [[str(v.get("status", "-")),
+                 str(v.get("fqdn") or v.get("subdomain", "-")),
+                 str(v.get("size", "-"))]
+                for v in vhosts[:50]]
+        parts.append(_md_table(["Status", "VHost", "Tamaño"], rows))
+        parts.append("")
+
+    # 6b. Directorios
     if dir_hits:
         parts.append(f"## Directorios encontrados (top 50 de {len(dir_hits)})")
         parts.append("")
@@ -1831,6 +1868,7 @@ def save_report(output_file=None):
         "delay": REQUEST_DELAY,
         "total_findings": len(FINDINGS),
         "total_api_endpoints": len(SCAN_DATA.get("api_endpoints", [])),
+        "total_vhosts": len(SCAN_DATA.get("vhosts", [])),
         "total_dir_hits": len(SCAN_DATA.get("directory_hits", [])),
         "injection_forms_found": SCAN_DATA.get("injection", {}).get("forms_found", 0),
         "injection_get_params_found": SCAN_DATA.get("injection", {}).get("url_params_found", 0),
@@ -1896,6 +1934,16 @@ def save_report(output_file=None):
             f.write("[ENDPOINTS API]\n")
             for ep in report_data['scan_data'].get('api_endpoints', []):
                 f.write(f"- [{ep.get('status')}] {ep.get('url')} ({ep.get('content_type', '')})\n")
+            f.write("\n")
+
+            f.write("[SUBDOMINIOS (VHOSTS)]\n")
+            vhosts_list = report_data['scan_data'].get('vhosts', [])
+            if vhosts_list:
+                for v in vhosts_list:
+                    fqdn = v.get('fqdn') or v.get('subdomain', '')
+                    f.write(f"- [{v.get('status')}] {fqdn} size={v.get('size', 'N/A')}\n")
+            else:
+                f.write("- Ninguno\n")
             f.write("\n")
 
             f.write("[DIRECTORIOS ENCONTRADOS]\n")
@@ -2155,6 +2203,182 @@ def check_http_methods(target, session):
     except Exception as e:
         print_error(f"Error en check_http_methods: {e}")
         return []
+
+def vhost_bruteforce(target, session, base_domain, wordlist=None, threads=THREADS, use_ffuf=True):
+    """Fuzzing de subdominios (virtual hosts) usando ffuf con técnica de Content-Length.
+
+    Manda una request con Host inválido (defnotvalid.<base_domain>) para obtener la
+    longitud baseline de "no encontrado" y luego ffuf filtra por -fs <baseline>
+    descartando todas las respuestas que coincidan.
+    """
+    results = []
+    try:
+        if not base_domain:
+            print_error("Dominio base vacío. No se puede hacer fuzzing de subdominios.")
+            return results
+
+        if wordlist is None and os.path.isfile(SECLISTS_DNS):
+            wordlist = SECLISTS_DNS
+        if wordlist and not os.path.isfile(wordlist):
+            print_warning(f"No se pudo leer la wordlist '{wordlist}'.")
+            wordlist = None
+        if not wordlist:
+            print_error("No hay wordlist disponible para vhost fuzzing.")
+            return results
+
+        # 1) Baseline: enviar un Host inválido al target y leer Content-Length
+        bogus_host = f"defnotvalid{int(time.time()) % 100000}.{base_domain}"
+        baseline_size = None
+        try:
+            print_info(f"Baseline con Host inválido: {bogus_host}")
+            base_resp = session.get(
+                target,
+                headers={"Host": bogus_host},
+                timeout=DEFAULT_TIMEOUT,
+                allow_redirects=False,
+            )
+            # Preferir Content-Length si está presente, si no usar len(content)
+            cl_header = base_resp.headers.get('Content-Length')
+            if cl_header and cl_header.isdigit():
+                baseline_size = int(cl_header)
+            else:
+                baseline_size = len(base_resp.content)
+            print_info(f"Baseline status={base_resp.status_code} Content-Length={baseline_size}")
+        except Exception as e:
+            print_warning(f"No se pudo calcular baseline ({e}); ffuf no filtrará por tamaño.")
+
+        if use_ffuf and check_ffuf():
+            tmp_fd, tmp_path = tempfile.mkstemp(suffix='.json')
+            os.close(tmp_fd)
+            ffuf_cmd = [
+                "ffuf",
+                "-w", f"{wordlist}:FUZZ",
+                "-u", target.rstrip('/') + '/',
+                "-H", f"Host: FUZZ.{base_domain}",
+                "-t", str(threads),
+                "-o", tmp_path, "-of", "json",
+            ]
+            if baseline_size is not None:
+                ffuf_cmd += ["-fs", str(baseline_size)]
+            print_info(f"Ejecutando: {' '.join(ffuf_cmd[:9])} ...")
+            print()
+            process = None
+            try:
+                process = subprocess.Popen(ffuf_cmd)
+                process.wait()
+                rc = process.returncode
+                print()
+
+                if os.path.isfile(tmp_path) and os.path.getsize(tmp_path) > 2:
+                    try:
+                        with open(tmp_path, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                        hits = data.get('results', [])
+                        STATUS_COLOR = {
+                            200: Fore.GREEN, 201: Fore.GREEN, 204: Fore.GREEN,
+                            301: Fore.CYAN,  302: Fore.CYAN,  307: Fore.CYAN, 308: Fore.CYAN,
+                            401: Fore.YELLOW, 403: Fore.YELLOW,
+                            500: Fore.RED, 503: Fore.RED,
+                        }
+                        if not hits:
+                            print(f"\n  {Fore.YELLOW}Sin subdominios encontrados (todo filtrado por baseline).{Style.RESET_ALL}\n")
+                        else:
+                            table_rows = []
+                            for hit in sorted(hits, key=lambda x: (x.get('status', 0), x.get('input', {}).get('FUZZ', ''))):
+                                sub = hit.get('input', {}).get('FUZZ', '')
+                                status = hit.get('status', 0)
+                                size = hit.get('length', 0)
+                                words_h = hit.get('words', 0)
+                                dur_ns = hit.get('duration', 0)
+                                dur_ms = dur_ns // 1_000_000 if dur_ns else 0
+                                fqdn = f"{sub}.{base_domain}"
+                                color = STATUS_COLOR.get(status, Fore.WHITE)
+                                table_rows.append([
+                                    f"{color}[{status}]{Style.RESET_ALL}",
+                                    fqdn,
+                                    f"{size:,}",
+                                    f"{words_h:,}",
+                                    f"{dur_ms}ms",
+                                ])
+                                results.append({
+                                    'subdomain': sub,
+                                    'fqdn': fqdn,
+                                    'status': status,
+                                    'size': size,
+                                })
+                                FINDINGS.append(f"[VHOST] {fqdn} [{status}]")
+                            print_table(
+                                headers=["STATUS", "VHOST", "SIZE", "WORDS", "DUR"],
+                                rows=table_rows,
+                                alignments=['<', '<', '>', '>', '>'],
+                                footer=f"  Total: {Fore.GREEN}{len(hits)}{Style.RESET_ALL} subdominio(s) encontrados\n",
+                            )
+                    except Exception as e:
+                        print_error(f"Error leyendo JSON de ffuf: {e}")
+                if rc not in (0, 1):
+                    print_error(f"ffuf terminó con código {rc}")
+            except KeyboardInterrupt:
+                if process:
+                    process.terminate()
+                print_warning("Fuzzing de subdominios interrumpido por el usuario")
+                SCAN_DATA["vhosts"] = results
+                return results
+            except Exception as e:
+                print_error(f"Error ejecutando ffuf: {e}")
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+            return results
+
+        # Método interno (sin ffuf)
+        print_warning("ffuf no disponible, usando método interno (más lento).")
+        try:
+            with open(wordlist, 'r', encoding='utf-8', errors='ignore') as f:
+                subs = [l.strip() for l in f if l.strip() and not l.startswith('#')]
+        except Exception as e:
+            print_error(f"Error leyendo wordlist: {e}")
+            return results
+        print_info(f"Probando {len(subs)} subdominios contra {base_domain}...")
+
+        def test_sub(sub):
+            fqdn = f"{sub}.{base_domain}"
+            try:
+                if REQUEST_DELAY > 0:
+                    time.sleep(REQUEST_DELAY)
+                r = session.get(target, headers={"Host": fqdn},
+                                timeout=DEFAULT_TIMEOUT, allow_redirects=False)
+                cl = r.headers.get('Content-Length')
+                size = int(cl) if cl and cl.isdigit() else len(r.content)
+                if baseline_size is not None and size == baseline_size:
+                    return None
+                return (sub, fqdn, r.status_code, size)
+            except Exception:
+                return None
+
+        iterator = subs
+        if HAS_TQDM:
+            pbar = tqdm(total=len(subs), desc="VHost fuzzing", unit="req", ncols=80)
+        try:
+            with ThreadPoolExecutor(max_workers=threads) as ex:
+                for res in ex.map(test_sub, iterator):
+                    if HAS_TQDM:
+                        pbar.update(1)
+                    if res:
+                        sub, fqdn, status, size = res
+                        print_good(f"[{status}] {fqdn} (size={size})")
+                        results.append({'subdomain': sub, 'fqdn': fqdn,
+                                        'status': status, 'size': size})
+                        FINDINGS.append(f"[VHOST] {fqdn} [{status}]")
+        finally:
+            if HAS_TQDM:
+                pbar.close()
+        return results
+    except Exception as e:
+        print_error(f"Error en vhost_bruteforce: {e}")
+        return results
+
 
 def dir_bruteforce(target, session, wordlist=None, threads=THREADS, use_ffuf=True):
     try:
@@ -3795,6 +4019,7 @@ def _has_scan_data():
         bool(SCAN_DATA.get("general")),
         bool(SCAN_DATA.get("injection")),
         bool(SCAN_DATA.get("api_endpoints")),
+        bool(SCAN_DATA.get("vhosts")),
         bool(SCAN_DATA.get("directory_hits")),
         bool(SCAN_DATA.get("users")),
         bool(SCAN_DATA.get("emails")),
@@ -3821,15 +4046,16 @@ def show_menu():
     print(" 1. Configurar autenticación (login)")
     print(" 2. Información general y enumeración")
     print(" 3. Análisis de vulnerabilidades con Nuclei")
-    print(" 4. Fuzzing de directorios (usa ffuf si está instalado)")
-    print(" 5. Spidering / Mapeo completo del sitio")
-    print(" 6. Pruebas de inyección (SQLi, XSS, Path Traversal, Command Injection)")
-    print(" 7. Pruebas de API (descubrimiento, IDOR, mass assignment)")
-    print(" 8. Enumeración de usuarios/emails y fuerza bruta de contraseñas")
-    print(" 9. PENTESTING COMPLETO (ejecuta todas las pruebas anteriores)")
+    print(" 4. Fuzzing de subdominios (vhost) con ffuf")
+    print(" 5. Fuzzing de directorios (usa ffuf si está instalado)")
+    print(" 6. Spidering / Mapeo completo del sitio")
+    print(" 7. Pruebas de inyección (SQLi, XSS, Path Traversal, Command Injection)")
+    print(" 8. Pruebas de API (descubrimiento, IDOR, mass assignment)")
+    print(" 9. Enumeración de usuarios/emails y fuerza bruta de contraseñas")
+    print("10. PENTESTING COMPLETO (ejecuta todas las pruebas anteriores)")
     if _has_scan_data():
-        print("11. Mostrar resumen en Markdown")
-    print("10. Salir")
+        print("12. Mostrar resumen en Markdown")
+    print("11. Salir")
     print("="*50)
 
 def run_information_gathering(target, session):
@@ -3856,6 +4082,44 @@ def run_information_gathering(target, session):
         safe_execute(check_directory_listing, target, session)
         safe_execute(check_ssl_tls, target)
         safe_execute(test_cors_advanced, target, session)
+
+def run_vhost_fuzzing(target, session):
+    print_phase("FUZZING DE SUBDOMINIOS (VHOST)")
+    parsed = urlparse(target)
+    host = parsed.hostname or ""
+    # Si el target es una IP, hace falta dominio base manual; si es FQDN, sugerirlo
+    is_ip = bool(re.match(r'^\d{1,3}(\.\d{1,3}){3}$', host))
+    if is_ip:
+        base_domain = input(
+            f"{Fore.YELLOW}[?]{Style.RESET_ALL} Dominio base (ej: planning.htb) — obligatorio cuando el target es IP: "
+        ).strip()
+    else:
+        default = host
+        base_in = input(
+            f"{Fore.YELLOW}[?]{Style.RESET_ALL} Dominio base [{default}]: "
+        ).strip()
+        base_domain = base_in or default
+    if not base_domain:
+        print_error("Dominio base requerido. Saltando vhost fuzzing.")
+        return
+    use_default = input(
+        f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Usar wordlist por defecto (SecLists DNS/namelist.txt)? [S/n]: "
+    ).strip().lower()
+    wordlist = None
+    if use_default == 'n':
+        custom_wl = input_path("Ruta a wordlist personalizada: ").strip()
+        if custom_wl:
+            wordlist = custom_wl
+    if check_ffuf():
+        use_ffuf = input(
+            f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Usar ffuf? (recomendado) [S/n]: "
+        ).strip().lower() != 'n'
+    else:
+        use_ffuf = False
+        print_warning("ffuf no está instalado. Usando método interno.")
+    hits = vhost_bruteforce(target, session, base_domain,
+                            wordlist=wordlist, threads=THREADS, use_ffuf=use_ffuf) or []
+    SCAN_DATA["vhosts"] = hits
 
 def run_directory_fuzzing(target, session):
     print_phase("FUZZING DE DIRECTORIOS")
@@ -4054,6 +4318,7 @@ def print_final_summary(target):
     nuclei_findings = SCAN_DATA.get("nuclei_findings") or []
     spider = SCAN_DATA.get("spider") or {}
     injection = SCAN_DATA.get("injection") or {}
+    vhosts = SCAN_DATA.get("vhosts") or []
     dir_hits = SCAN_DATA.get("directory_hits") or []
     api_endpoints = SCAN_DATA.get("api_endpoints") or []
     users = SCAN_DATA.get("users") or []
@@ -4071,6 +4336,7 @@ def print_final_summary(target):
         ["Hallazgos (FINDINGS)", str(len(FINDINGS))],
         ["Vulnerabilidades Nuclei", str(len(nuclei_findings))],
         ["URLs spider", str(spider.get("total_urls", 0))],
+        ["Subdominios (vhosts)", str(len(vhosts))],
         ["Directorios encontrados", str(len(dir_hits))],
         ["Endpoints API", str(len(api_endpoints))],
         ["Usuarios", str(len(users))],
@@ -4152,7 +4418,23 @@ def print_final_summary(target):
                 title=f"Muestra de URLs descubiertas (top {len(url_rows)} de {spider.get('total_urls', 0)}):",
             )
 
-    # 6. Directorios
+    # 6a. Subdominios (vhosts)
+    if vhosts:
+        vh_rows = []
+        for v in vhosts[:30]:
+            status = str(v.get("status", "-"))
+            fqdn = _trim(v.get("fqdn") or v.get("subdomain", "-"), 80)
+            size = str(v.get("size", "-"))
+            sc = Fore.GREEN if status.startswith("2") else (Fore.YELLOW if status.startswith("3") else Fore.RED if status.startswith("4") else Fore.WHITE)
+            vh_rows.append([f"{sc}{status}{Style.RESET_ALL}", fqdn, size])
+        print_table(
+            headers=["Status", "VHost", "Tamaño"],
+            rows=vh_rows,
+            alignments=['<', '<', '>'],
+            title=f"Subdominios encontrados (top {len(vh_rows)} de {len(vhosts)}):",
+        )
+
+    # 6b. Directorios
     if dir_hits:
         dir_rows = []
         for h in dir_hits[:30]:
@@ -4290,7 +4572,7 @@ def print_final_summary(target):
             else:
                 cat, msg = "OTROS", f
             color = Fore.RED if cat.startswith(("VULN", "NUCLEI:CRITICAL", "NUCLEI:HIGH", "CRED")) else (
-                Fore.YELLOW if cat.startswith(("NUCLEI:MEDIUM", "DIR")) else Fore.CYAN
+                Fore.YELLOW if cat.startswith(("NUCLEI:MEDIUM", "DIR", "VHOST")) else Fore.CYAN
             )
             find_rows.append([f"{color}{cat}{Style.RESET_ALL}", _trim(msg, 110)])
         print_table(
@@ -4301,7 +4583,7 @@ def print_final_summary(target):
         )
 
     print()
-    print_good("Recopilación finalizada. Use 'Guardar reporte' al salir para exportar TXT/JSON/HTML.")
+    print_good("Recopilación finalizada. Use 'Guardar reporte' al salir para exportar TXT/JSON/HTML/MD.")
 
 
 def run_full_pentest(target, session):
@@ -4309,11 +4591,12 @@ def run_full_pentest(target, session):
     # Orden según menú principal:
     run_information_gathering(target, session)         # 2
     run_nuclei_scan(target)                            # 3
-    run_directory_fuzzing(target, session)             # 4
-    run_spider(target, session)                        # 5
-    run_injection_tests(target, session)               # 6
-    run_api_tests(target, session)                     # 7
-    run_user_enum_bruteforce(target, session)          # 8
+    run_vhost_fuzzing(target, session)                 # 4
+    run_directory_fuzzing(target, session)             # 5
+    run_spider(target, session)                        # 6
+    run_injection_tests(target, session)               # 7
+    run_api_tests(target, session)                     # 8
+    run_user_enum_bruteforce(target, session)          # 9
     print_good("Pentesting completo finalizado.")
     print_final_summary(target)
 
@@ -4372,17 +4655,7 @@ def main():
     def _exit_gracefully():
         """Cierra el programa mostrando el reporte y el mensaje final."""
         print()
-        has_scan_data = any([
-            bool(FINDINGS),
-            bool(SCAN_DATA.get("general")),
-            bool(SCAN_DATA.get("injection")),
-            bool(SCAN_DATA.get("api_endpoints")),
-            bool(SCAN_DATA.get("directory_hits")),
-            bool(SCAN_DATA.get("users")),
-            bool(SCAN_DATA.get("emails")),
-            bool(SCAN_DATA.get("bruteforce_credentials")),
-            bool(SCAN_DATA.get("spider")),
-        ])
+        has_scan_data = _has_scan_data()
         if has_scan_data:
             auto_save = OUTPUT_FILE is not None
             if not auto_save:
@@ -4425,18 +4698,20 @@ def main():
             elif option == '3':
                 run_nuclei_scan(TARGET_URL)
             elif option == '4':
-                run_directory_fuzzing(TARGET_URL, session)
+                run_vhost_fuzzing(TARGET_URL, session)
             elif option == '5':
-                run_spider(TARGET_URL, session)
+                run_directory_fuzzing(TARGET_URL, session)
             elif option == '6':
-                run_injection_tests(TARGET_URL, session)
+                run_spider(TARGET_URL, session)
             elif option == '7':
-                run_api_tests(TARGET_URL, session)
+                run_injection_tests(TARGET_URL, session)
             elif option == '8':
-                run_user_enum_bruteforce(TARGET_URL, session)
+                run_api_tests(TARGET_URL, session)
             elif option == '9':
+                run_user_enum_bruteforce(TARGET_URL, session)
+            elif option == '10':
                 run_full_pentest(TARGET_URL, session)
-            elif option == '11':
+            elif option == '12':
                 if not _has_scan_data():
                     print_warning("Aún no hay datos. Ejecuta primero algún módulo o el pentesting completo.")
                 else:
@@ -4455,7 +4730,7 @@ def main():
                     print(md)
                     print("=" * 70)
                     print_good("Fin del markdown. Copia el bloque anterior.")
-            elif option == '10':
+            elif option == '11':
                 _exit_gracefully()
             else:
                 print_error("Opción no válida. Intenta de nuevo.")
