@@ -1,14 +1,11 @@
-# 🔐 WSTG-Scan
+# 🔐 OWASP WSTG Security Scanner
 
-<div align="center">
-
-![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)
+<div align="center">![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen.svg)
 ![Platform](https://img.shields.io/badge/Platform-Kali%20Linux-lightgrey.svg)
 
-
-**WSTG-Scan** es una herramienta interactiva y completa de pruebas de seguridad web basada en la metodología OWASP WSTG.
+**Herramienta interactiva y completa de pruebas de seguridad web** basada en la metodología OWASP WSTG.
 
 [Características](#-características) • [Instalación](#-instalación) • [Uso](#-uso-rápido) • [Reportes](#-reportes) • [Contribuir](#-contribuciones)
 
@@ -16,9 +13,8 @@
 
 ---
 
-<img width="1875" height="1111" alt="image" src="https://github.com/user-attachments/assets/61bbfe50-2096-488e-9eb5-0fca59e41636" />
+<img width="1855" height="1019" alt="image" src="https://github.com/user-attachments/assets/c6e2449a-a8c6-44c9-a306-56684d2a5239" />
 
----
 
 ## 📋 Tabla de Contenidos
 
@@ -39,8 +35,7 @@
 
 ## 📝 Descripción
 
-
-**WSTG-Scan** es una herramienta de pentesting web **interactiva y comprehensiva** que implementa las mejores prácticas del [OWASP Web Security Testing Guide](https://owasp.org/www-project-web-security-testing-guide/) y el [OWASP API Top 10](https://owasp.org/API-Security/).
+**WSTG Scanner** es una herramienta de pentesting web **interactiva y comprehensiva** que implementa las mejores prácticas del [OWASP Web Security Testing Guide](https://owasp.org/www-project-web-security-testing-guide/) y el [OWASP API Top 10](https://owasp.org/API-Security/).
 
 Diseñada para security researchers y pentesters, automatiza tareas comunes de reconocimiento, análisis y testing:
 - 🕷️ Mapeo completo y exhaustivo de aplicaciones web (spidering con detección de formularios e inputs)
@@ -54,7 +49,7 @@ Diseñada para security researchers y pentesters, automatiza tareas comunes de r
 
 ---
 
-## ⭐ Características principales de WSTG-Scan
+## ⭐ Características
 
 ### 🔎 Reconocimiento
 - **Información general** – Server, headers, cookies, SSL/TLS, métodos HTTP, robots.txt / sitemap.xml
@@ -394,3 +389,22 @@ Unauthorized access to computer systems is illegal."
 - [ProjectDiscovery](https://github.com/projectdiscovery) por Nuclei
 - [Daniel Miessler](https://github.com/danielmiessler) por SecLists
 - [van Hauser](https://github.com/vanhauser-thc) por Hydra
+ras de progreso, control de errores elegante, mensajes claros y visibles.
+- **Configuración avanzada**: Personalización de wordlists, timeout, hilos, delay, uso de proxies, etc.
+- **Código limpio y modular**: Fácil de mantener y extender.
+
+---
+
+<div align="center">
+
+⭐ Si te fue útil, ¡dale una estrella! ⭐
+
+</div>
+
+Licencia
+MIT License.
+
+Agradecimientos
+OWASP por la guía WSTG.
+
+Daniel Miessler por SecLists.
