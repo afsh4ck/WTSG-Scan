@@ -1,15 +1,23 @@
 # 🔐 OWASP WSTG Security Scanner
 
-<div align="center">![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)
-![License](https://img.shields.io/badge/License-MIT-green.svg)
-![Status](https://img.shields.io/badge/Status-Active-brightgreen.svg)
-![Platform](https://img.shields.io/badge/Platform-Kali%20Linux-lightgrey.svg)
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.8+-blue.svg" alt="Python">
+  <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License">
+  <img src="https://img.shields.io/badge/Status-Active-brightgreen.svg" alt="Status">
+  <img src="https://img.shields.io/badge/Platform-Kali%20Linux-lightgrey.svg" alt="Platform">
+</p>
 
-**Herramienta interactiva y completa de pruebas de seguridad web** basada en la metodología OWASP WSTG.
+<p align="center">
+  <strong>Herramienta interactiva y completa de pruebas de seguridad web</strong> basada en la metodología OWASP WSTG.
+</p>
 
-[Características](#-características) • [Instalación](#-instalación) • [Uso](#-uso-rápido) • [Reportes](#-reportes) • [Contribuir](#-contribuciones)
-
-</div>
+<p align="center">
+  <a href="#-características">Características</a> •
+  <a href="#-instalación">Instalación</a> •
+  <a href="#-uso-rápido">Uso</a> •
+  <a href="#-reportes">Reportes</a> •
+  <a href="#-contribuciones">Contribuir</a>
+</p>
 
 ---
 
@@ -145,8 +153,8 @@ Diseñada para security researchers y pentesters, automatiza tareas comunes de r
 ### 1️⃣ Instalación rápida (Kali Linux)
 
 ```bash
-git clone https://github.com/afsh4ck/WTSG-Scan.git
-cd WTSG-Scan
+git clone https://github.com/afsh4ck/WSTG-Scan.git
+cd WSTG-Scan
 
 # Crear entorno virtual (recomendado)
 python3 -m venv venv
@@ -182,7 +190,7 @@ nuclei -update-templates
 ### Modo interactivo
 
 ```bash
-python3 wstg-scanner.py
+python3 wstg-scan.py
 ```
 
 Se pedirá la URL objetivo y se mostrará el menú principal.
@@ -190,7 +198,7 @@ Se pedirá la URL objetivo y se mostrará el menú principal.
 ### Modo argumentos CLI
 
 ```bash
-python3 wstg-scanner.py --url https://example.com --output report.txt --threads 10 --timeout 15
+python3 wstg-scan.py --url https://example.com --output report.txt --threads 10 --timeout 15
 ```
 
 | Argumento | Descripción |
@@ -206,7 +214,7 @@ python3 wstg-scanner.py --url https://example.com --output report.txt --threads 
 ### Pre-autenticación
 
 ```bash
-python3 wstg-scanner.py
+python3 wstg-scan.py
 # Menú → 1. Configurar autenticación (login)
 # Introduce usuario, contraseña y URL de login
 # Las siguientes pruebas usarán la sesión autenticada
@@ -285,7 +293,7 @@ REQUEST_DELAY   = 0.0  # delay entre requests
 ```bash
 export HTTP_PROXY=http://127.0.0.1:8080
 export HTTPS_PROXY=http://127.0.0.1:8080
-python3 wstg-scanner.py
+python3 wstg-scan.py
 ```
 
 ---
@@ -352,11 +360,10 @@ Este proyecto está bajo la licencia **MIT**. Ver [LICENSE](LICENSE) para detall
 
 ## 👨‍💻 Autor
 
-**afsh4ck** – Security Researcher & Penetration Tester
+**afsh4ck** – Offensive Security Engineer | Pentester
 
 - 🐙 GitHub: [@afsh4ck](https://github.com/afsh4ck)
 - 🔗 LinkedIn: [afsh4ck](https://linkedin.com/in/afsh4ck)
-- 📧 Email: afsh4ck@protonmail.com
 
 ---
 

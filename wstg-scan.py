@@ -3653,6 +3653,279 @@ def run_spider(target, session):
                 f.write(url + '\n')
         print_good(f"URLs guardadas en {filename}")
 
+def print_final_summary(target):
+    """Imprime una recopilación final con todas las tablas de SCAN_DATA y FINDINGS.
+
+    Se invoca al terminar el pentesting completo (opción 9) para ofrecer una
+    vista consolidada de toda la información recopilada antes de guardar el reporte.
+    """
+    SEV_ORDER = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4, 'unknown': 5}
+    SEV_COLOR = {
+        'critical': Fore.MAGENTA, 'high': Fore.RED, 'medium': Fore.YELLOW,
+        'low': Fore.CYAN, 'info': Fore.WHITE, 'unknown': Fore.WHITE,
+    }
+
+    def _trim(value, width=80):
+        text = str(value) if value is not None else "-"
+        return text if len(text) <= width else text[: width - 3] + "..."
+
+    print_phase("RESUMEN FINAL DEL PENTESTING")
+
+    general = SCAN_DATA.get("general") or {}
+    nuclei_summary = SCAN_DATA.get("nuclei_summary") or {}
+    nuclei_findings = SCAN_DATA.get("nuclei_findings") or []
+    spider = SCAN_DATA.get("spider") or {}
+    injection = SCAN_DATA.get("injection") or {}
+    dir_hits = SCAN_DATA.get("directory_hits") or []
+    api_endpoints = SCAN_DATA.get("api_endpoints") or []
+    users = SCAN_DATA.get("users") or []
+    emails = SCAN_DATA.get("emails") or []
+    creds = SCAN_DATA.get("bruteforce_credentials") or []
+    robots_paths = SCAN_DATA.get("robots_paths") or []
+    http_methods = SCAN_DATA.get("http_methods") or []
+
+    # 1. Resumen ejecutivo
+    overview_rows = [
+        ["Objetivo", _trim(target, 90)],
+        ["Status HTTP", str(general.get("status_code", "-"))],
+        ["Servidor", _trim(general.get("server", "-"), 90)],
+        ["Tecnologías", _trim(", ".join(general.get("technologies", [])) or "-", 90)],
+        ["Hallazgos (FINDINGS)", str(len(FINDINGS))],
+        ["Vulnerabilidades Nuclei", str(len(nuclei_findings))],
+        ["URLs spider", str(spider.get("total_urls", 0))],
+        ["Directorios encontrados", str(len(dir_hits))],
+        ["Endpoints API", str(len(api_endpoints))],
+        ["Usuarios", str(len(users))],
+        ["Emails", str(len(emails))],
+        ["Credenciales válidas", str(len(creds))],
+    ]
+    print_table(
+        headers=["Campo", "Valor"],
+        rows=overview_rows,
+        alignments=['<', '<'],
+        title="Resumen ejecutivo:",
+    )
+
+    # 2. Headers de seguridad
+    sec_header_names = [
+        "Strict-Transport-Security", "Content-Security-Policy",
+        "X-Frame-Options", "X-Content-Type-Options",
+        "Referrer-Policy", "Permissions-Policy",
+    ]
+    headers = (general.get("headers") or {})
+    sec_rows = []
+    for h in sec_header_names:
+        v = headers.get(h) or headers.get(h.lower()) or "-"
+        present = v != "-"
+        mark = f"{Fore.GREEN}OK{Style.RESET_ALL}" if present else f"{Fore.RED}AUSENTE{Style.RESET_ALL}"
+        sec_rows.append([h, mark, _trim(v, 80)])
+    print_table(
+        headers=["Header", "Estado", "Valor"],
+        rows=sec_rows,
+        alignments=['<', '<', '<'],
+        title="Cabeceras de seguridad:",
+    )
+
+    # 3. Cookies
+    cookies = general.get("cookies") or []
+    if cookies:
+        cookie_rows = [[c] for c in cookies]
+        print_table(
+            headers=["Cookie"],
+            rows=cookie_rows,
+            alignments=['<'],
+            title="Cookies detectadas:",
+        )
+
+    # 4. HTTP methods + robots
+    misc_rows = []
+    if http_methods:
+        misc_rows.append(["HTTP Methods permitidos", _trim(", ".join(http_methods), 90)])
+    if robots_paths:
+        misc_rows.append([f"Rutas de robots.txt/sitemap ({len(robots_paths)})", _trim(", ".join(robots_paths[:15]), 90)])
+    if misc_rows:
+        print_table(
+            headers=["Categoría", "Valor"],
+            rows=misc_rows,
+            alignments=['<', '<'],
+            title="Información HTTP adicional:",
+        )
+
+    # 5. Spider
+    if spider:
+        spider_rows = [
+            ["URLs totales", str(spider.get("total_urls", 0))],
+            ["Parámetros únicos", str(spider.get("total_params", 0))],
+            ["Formularios", str(spider.get("total_forms", 0))],
+        ]
+        print_table(
+            headers=["Métrica", "Valor"],
+            rows=spider_rows,
+            alignments=['<', '>'],
+            title="Spidering:",
+        )
+        sample_urls = spider.get("sample_urls") or []
+        if sample_urls:
+            url_rows = [[_trim(u, 110)] for u in sample_urls[:20]]
+            print_table(
+                headers=["URL"],
+                rows=url_rows,
+                alignments=['<'],
+                title=f"Muestra de URLs descubiertas (top {len(url_rows)} de {spider.get('total_urls', 0)}):",
+            )
+
+    # 6. Directorios
+    if dir_hits:
+        dir_rows = []
+        for h in dir_hits[:30]:
+            status = str(h.get("status", "-"))
+            url = _trim(h.get("url", "-"), 90)
+            size = str(h.get("size", "-"))
+            sc = Fore.GREEN if status.startswith("2") else (Fore.YELLOW if status.startswith("3") else Fore.RED if status.startswith("4") else Fore.WHITE)
+            dir_rows.append([f"{sc}{status}{Style.RESET_ALL}", url, size])
+        print_table(
+            headers=["Status", "URL", "Tamaño"],
+            rows=dir_rows,
+            alignments=['<', '<', '>'],
+            title=f"Directorios encontrados (top {len(dir_rows)} de {len(dir_hits)}):",
+        )
+
+    # 7. API endpoints
+    if api_endpoints:
+        api_rows = []
+        for ep in api_endpoints[:30]:
+            status = str(ep.get("status", "-"))
+            endpoint = _trim(ep.get("endpoint") or ep.get("url", "-"), 60)
+            ctype = _trim(ep.get("content_type", "-"), 30)
+            api_rows.append([status, endpoint, ctype])
+        print_table(
+            headers=["Status", "Endpoint", "Content-Type"],
+            rows=api_rows,
+            alignments=['<', '<', '<'],
+            title=f"Endpoints API descubiertos (top {len(api_rows)} de {len(api_endpoints)}):",
+        )
+
+    # 8. Usuarios y emails
+    if users or emails:
+        ue_rows = []
+        if users:
+            ue_rows.append(["Usuarios", _trim(", ".join(users), 100)])
+        if emails:
+            ue_rows.append(["Emails", _trim(", ".join(emails), 100)])
+        print_table(
+            headers=["Categoría", "Valores"],
+            rows=ue_rows,
+            alignments=['<', '<'],
+            title="Usuarios y emails descubiertos:",
+        )
+
+    # 9. Inyección
+    if injection.get("executed"):
+        inj_rows = [
+            ["Formularios detectados", str(injection.get("forms_found", 0))],
+            ["Parámetros GET detectados", str(injection.get("url_params_found", 0))],
+            ["Parámetros GET probados", str(len(injection.get("tested_get_params", [])))],
+            ["Inputs de formulario probados", str(len(injection.get("tested_form_inputs", [])))],
+        ]
+        print_table(
+            headers=["Métrica", "Valor"],
+            rows=inj_rows,
+            alignments=['<', '>'],
+            title="Pruebas de inyección:",
+        )
+
+    # 10. Credenciales válidas
+    if creds:
+        cred_rows = []
+        for c in creds:
+            user = c.get("username") if isinstance(c, dict) else str(c)
+            pwd = c.get("password") if isinstance(c, dict) else "-"
+            cred_rows.append([f"{Fore.GREEN}{user}{Style.RESET_ALL}", f"{Fore.GREEN}{pwd}{Style.RESET_ALL}"])
+        print_table(
+            headers=["Usuario", "Contraseña"],
+            rows=cred_rows,
+            alignments=['<', '<'],
+            title="Credenciales válidas encontradas:",
+            border_color=Fore.GREEN,
+        )
+
+    # 11. Nuclei
+    if nuclei_summary:
+        sum_rows = []
+        for sev in sorted(nuclei_summary.keys(), key=lambda s: SEV_ORDER.get(s, 99)):
+            tids = nuclei_summary[sev]
+            color = SEV_COLOR.get(sev, Fore.WHITE)
+            unique_str = ", ".join(sorted(set(tids)))
+            sum_rows.append([
+                f"{color}{sev.upper()}{Style.RESET_ALL}",
+                str(len(tids)),
+                _trim(unique_str, 100),
+            ])
+        print_table(
+            headers=["Severidad", "Cantidad", "Templates únicos"],
+            rows=sum_rows,
+            alignments=['<', '>', '<'],
+            title="Vulnerabilidades por severidad (Nuclei):",
+        )
+
+    relevant_nuclei = [n for n in nuclei_findings if n.get('severity') in ('critical', 'high', 'medium', 'low')]
+    if relevant_nuclei:
+        rel_rows = []
+        for n in relevant_nuclei[:30]:
+            sev = n.get('severity', 'info')
+            color = SEV_COLOR.get(sev, Fore.WHITE)
+            rel_rows.append([
+                f"{color}{sev.upper()}{Style.RESET_ALL}",
+                _trim(n.get('template_id', '-'), 40),
+                _trim(n.get('name', '-'), 50),
+                _trim(n.get('url', '-'), 60),
+            ])
+        print_table(
+            headers=["Severidad", "Template", "Nombre", "URL"],
+            rows=rel_rows,
+            alignments=['<', '<', '<', '<'],
+            title=f"Hallazgos Nuclei relevantes (top {len(rel_rows)} de {len(relevant_nuclei)}):",
+        )
+
+    # 12. Hallazgos clasificados (FINDINGS)
+    if FINDINGS:
+        cats = {}
+        for f in FINDINGS:
+            m = re.match(r'^\[([^\]]+)\]', f)
+            cat = m.group(1) if m else "OTROS"
+            cats.setdefault(cat, []).append(f)
+        cat_rows = []
+        for cat in sorted(cats.keys()):
+            cat_rows.append([cat, str(len(cats[cat]))])
+        print_table(
+            headers=["Categoría", "Cantidad"],
+            rows=cat_rows,
+            alignments=['<', '>'],
+            title=f"Hallazgos clasificados (total: {len(FINDINGS)}):",
+        )
+        find_rows = []
+        for f in FINDINGS[:40]:
+            m = re.match(r'^\[([^\]]+)\]\s*(.*)', f)
+            if m:
+                cat = m.group(1)
+                msg = m.group(2)
+            else:
+                cat, msg = "OTROS", f
+            color = Fore.RED if cat.startswith(("VULN", "NUCLEI:CRITICAL", "NUCLEI:HIGH", "CRED")) else (
+                Fore.YELLOW if cat.startswith(("NUCLEI:MEDIUM", "DIR")) else Fore.CYAN
+            )
+            find_rows.append([f"{color}{cat}{Style.RESET_ALL}", _trim(msg, 110)])
+        print_table(
+            headers=["Categoría", "Detalle"],
+            rows=find_rows,
+            alignments=['<', '<'],
+            title=f"Detalle de hallazgos (primeros {len(find_rows)} de {len(FINDINGS)}):",
+        )
+
+    print()
+    print_good("Recopilación finalizada. Use 'Guardar reporte' al salir para exportar TXT/JSON/HTML.")
+
+
 def run_full_pentest(target, session):
     print_phase("INICIANDO PENTESTING COMPLETO")
     # Orden según menú principal:
@@ -3664,6 +3937,7 @@ def run_full_pentest(target, session):
     run_api_tests(target, session)                     # 7
     run_user_enum_bruteforce(target, session)          # 8
     print_good("Pentesting completo finalizado.")
+    print_final_summary(target)
 
 def main():
     global TARGET_URL, AUTHENTICATED, AUTH_SESSION, THREADS, DEFAULT_TIMEOUT, REQUEST_DELAY, OUTPUT_FILE
