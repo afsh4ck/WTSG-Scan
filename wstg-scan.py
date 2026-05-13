@@ -137,6 +137,7 @@ SCAN_DATA = {
     "general": {},
     "robots_paths": [],
     "http_methods": [],
+    "nmap": {},
     "vhosts": [],
     "directory_hits": [],
     "injection": {},
@@ -449,6 +450,163 @@ def run_whatweb(target):
     except Exception as e:
         print_error(f"Error ejecutando WhatWeb: {e}")
         return None
+
+def check_nmap():
+    return shutil.which("nmap")
+
+def install_nmap():
+    """Ofrece instalar nmap vía apt si no está disponible."""
+    print_warning("nmap no está instalado.")
+    try:
+        resp = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Instalar nmap automáticamente? (requiere sudo) [s/N]: ").strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        return False
+    if resp != 's':
+        return False
+    try:
+        print_info("Ejecutando: sudo apt-get install -y nmap")
+        subprocess.run(["sudo", "apt-get", "install", "-y", "nmap"], check=True)
+        if check_nmap():
+            print_good("nmap instalado correctamente.")
+            return True
+        print_error("La instalación parece haber fallado.")
+        return False
+    except Exception as e:
+        print_error(f"No se pudo instalar nmap: {e}")
+        return False
+
+def run_nmap_scan(target):
+    """Ejecuta `nmap -sV` sobre el host del target y guarda los puertos en SCAN_DATA["nmap"].
+
+    Parsea el XML de salida (-oX -) para una extracción robusta de puerto, estado,
+    servicio, producto y versión. Muestra tabla visual al terminar.
+    """
+    print_phase("ESCANEO DE PUERTOS (NMAP)")
+    nmap_path = check_nmap()
+    if not nmap_path:
+        if not install_nmap():
+            print_warning("Saltando escaneo de puertos.")
+            return None
+        nmap_path = check_nmap()
+        if not nmap_path:
+            return None
+
+    host = urlparse(target).hostname or target
+    if not host:
+        print_error("No se pudo extraer el host del target.")
+        return None
+
+    print_info(f"Ejecutando: nmap -sV {host}")
+    print()
+    try:
+        proc = subprocess.run(
+            [nmap_path, "-sV", "-oX", "-", host],
+            capture_output=True, text=True, timeout=600
+        )
+    except subprocess.TimeoutExpired:
+        print_error("nmap excedió el timeout de 600s.")
+        return None
+    except KeyboardInterrupt:
+        print_warning("Escaneo de puertos interrumpido por el usuario.")
+        return None
+    except Exception as e:
+        print_error(f"Error ejecutando nmap: {e}")
+        return None
+
+    xml_out = proc.stdout or ""
+    if proc.returncode not in (0, 1) or not xml_out.strip().startswith("<?xml"):
+        # Mostrar el stderr / stdout para diagnóstico
+        if proc.stderr:
+            print_error(proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else f"nmap rc={proc.returncode}")
+        else:
+            print_error(f"nmap rc={proc.returncode}")
+        return None
+
+    ports = []
+    host_info = {"address": host, "hostnames": [], "status": ""}
+    try:
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(xml_out)
+        for h in root.findall("host"):
+            status_el = h.find("status")
+            if status_el is not None:
+                host_info["status"] = status_el.get("state", "")
+            for addr in h.findall("address"):
+                if addr.get("addrtype") in ("ipv4", "ipv6"):
+                    host_info["address"] = addr.get("addr") or host_info["address"]
+            for hn in h.findall("hostnames/hostname"):
+                name = hn.get("name")
+                if name:
+                    host_info["hostnames"].append(name)
+            for p in h.findall("ports/port"):
+                state_el = p.find("state")
+                svc_el = p.find("service")
+                if state_el is None:
+                    continue
+                state = state_el.get("state", "")
+                if state not in ("open", "open|filtered"):
+                    continue
+                entry = {
+                    "port": int(p.get("portid", 0)),
+                    "protocol": p.get("protocol", ""),
+                    "state": state,
+                    "service": (svc_el.get("name") if svc_el is not None else "") or "",
+                    "product": (svc_el.get("product") if svc_el is not None else "") or "",
+                    "version": (svc_el.get("version") if svc_el is not None else "") or "",
+                    "extrainfo": (svc_el.get("extrainfo") if svc_el is not None else "") or "",
+                }
+                ports.append(entry)
+    except Exception as e:
+        print_error(f"Error parseando XML de nmap: {e}")
+        return None
+
+    ports.sort(key=lambda x: (x.get("port", 0), x.get("protocol", "")))
+
+    # Tabla visual
+    if ports:
+        STATE_COLOR = {"open": Fore.GREEN, "open|filtered": Fore.YELLOW}
+        rows = []
+        for p in ports:
+            color = STATE_COLOR.get(p["state"], Fore.WHITE)
+            version_parts = [p.get("product", ""), p.get("version", ""), p.get("extrainfo", "")]
+            version_str = " ".join([v for v in version_parts if v]).strip() or "-"
+            if len(version_str) > 60:
+                version_str = version_str[:57] + "..."
+            rows.append([
+                f"{p['port']}/{p['protocol']}",
+                f"{color}{p['state']}{Style.RESET_ALL}",
+                p.get("service", "") or "-",
+                version_str,
+            ])
+        print_table(
+            headers=["PUERTO", "ESTADO", "SERVICIO", "VERSIÓN"],
+            rows=rows,
+            alignments=['<', '<', '<', '<'],
+            title=f"Puertos abiertos ({len(ports)}):",
+        )
+        # Registrar en FINDINGS los puertos abiertos para que aparezcan
+        # también en las secciones de hallazgos clasificados.
+        for p in ports:
+            label = p.get("service", "") or "?"
+            version_str = " ".join(
+                [v for v in (p.get("product", ""), p.get("version", "")) if v]
+            ).strip()
+            FINDINGS.append(
+                f"[PORT] {host_info['address']}:{p['port']}/{p['protocol']} "
+                f"{label}" + (f" ({version_str})" if version_str else "")
+            )
+    else:
+        print_info("nmap no encontró puertos abiertos visibles.")
+
+    SCAN_DATA["nmap"] = {
+        "host": host_info["address"],
+        "hostnames": host_info["hostnames"],
+        "status": host_info["status"],
+        "ports": ports,
+        "command": f"nmap -sV {host}",
+    }
+    return SCAN_DATA["nmap"]
+
 
 def check_nuclei():
     return shutil.which("nuclei")
@@ -808,6 +966,8 @@ def _build_html_report(report_data):
     emails = scan_data.get("emails", [])
     endpoints = scan_data.get("api_endpoints", [])
     vhosts_list = scan_data.get("vhosts", [])
+    nmap_data = scan_data.get("nmap", {}) or {}
+    nmap_ports = nmap_data.get("ports", []) or []
     dirs = scan_data.get("directory_hits", [])
     creds = scan_data.get("bruteforce_credentials", [])
     spider = scan_data.get("spider", {})
@@ -868,12 +1028,15 @@ def _build_html_report(report_data):
             return "Directorios / Endpoints"
         if s.startswith('[VHOST]'):
             return "Subdominios (vhosts)"
+        if s.startswith('[PORT]'):
+            return "Puertos abiertos (Nmap)"
         return "Otros"
 
     CAT_ORDER = [
         "Vulnerabilidades",
         "Nuclei — CRITICAL", "Nuclei — HIGH", "Nuclei — MEDIUM",
         "Nuclei — LOW", "Nuclei — INFO", "Nuclei — UNKNOWN",
+        "Puertos abiertos (Nmap)",
         "Subdominios (vhosts)",
         "Directorios / Endpoints",
         "Otros",
@@ -947,6 +1110,20 @@ def _build_html_report(report_data):
         "</tr>"
         for v in vhosts_list[:300] if isinstance(v, dict)
     ) or "<tr><td colspan='3'>Sin subdominios detectados.</td></tr>"
+
+    def _nmap_version(p):
+        parts = [p.get('product', ''), p.get('version', ''), p.get('extrainfo', '')]
+        return ' '.join(x for x in parts if x).strip()
+
+    nmap_rows = "\n".join(
+        "<tr>"
+        f"<td>{_html_escape(p.get('port', ''))}/{_html_escape(p.get('protocol', ''))}</td>"
+        f"<td>{_html_escape(p.get('state', ''))}</td>"
+        f"<td>{_html_escape(p.get('service', ''))}</td>"
+        f"<td>{_html_escape(_nmap_version(p))}</td>"
+        "</tr>"
+        for p in nmap_ports if isinstance(p, dict)
+    ) or "<tr><td colspan='4'>Sin puertos detectados.</td></tr>"
 
     dir_rows = ""
     if dirs:
@@ -1031,6 +1208,7 @@ def _build_html_report(report_data):
     nav_sections = [
         ("Resumen", "resumen"),
         ("Información general", "info"),
+        ("Puertos (Nmap)", "nmap"),
         ("Hallazgos", "hallazgos"),
         ("API", "api"),
         ("Subdominios", "vhosts"),
@@ -1116,6 +1294,7 @@ def _build_html_report(report_data):
                 <div><span class="muted">Tecnologías</span><b>{len(technologies)}</b></div>
                 <div><span class="muted">API</span><b>{len(endpoints)}</b></div>
                 <div><span class="muted">VHosts</span><b>{len(vhosts_list)}</b></div>
+                <div><span class="muted">Puertos</span><b>{len(nmap_ports)}</b></div>
                 <div><span class="muted">Directorios</span><b>{len(dirs)}</b></div>
                 <div><span class="muted">Usuarios</span><b>{len(users)}</b></div>
                 <div><span class="muted">Credenciales</span><b>{len(creds)}</b></div>
@@ -1131,6 +1310,12 @@ def _build_html_report(report_data):
             <p><b>Tecnologías:</b><br>{technologies_html}</p>
             <p><b>Usuarios:</b><br>{users_html}</p>
             <p><b>Emails:</b><br>{emails_html}</p>
+        </div>
+
+        <div class="card" id='nmap'>
+            <h3>Escaneo de puertos (Nmap)</h3>
+            <p class='muted'>Comando: <code>{_html_escape(nmap_data.get('command', 'nmap -sV'))}</code> · Host: <code>{_html_escape(nmap_data.get('host', '-'))}</code></p>
+            <table><thead><tr><th>Puerto</th><th>Estado</th><th>Servicio</th><th>Versión</th></tr></thead><tbody>{nmap_rows}</tbody></table>
         </div>
 
         <div class="card" id='hallazgos'><h3>Hallazgos</h3>{findings_items}</div>
@@ -1233,6 +1418,8 @@ def _build_markdown_report(report_data):
     http_methods = scan_data.get("http_methods", []) or []
     src_code = scan_data.get("source_code_analysis", {}) or {}
     src_findings = src_code.get("findings") or []
+    nmap_data = scan_data.get("nmap", {}) or {}
+    nmap_ports = nmap_data.get("ports", []) or []
 
     def _tech_str(item):
         if isinstance(item, dict):
@@ -1267,6 +1454,7 @@ def _build_markdown_report(report_data):
         ["Servidor", str(general.get("server", "-"))],
         ["Tecnologías", tech_str],
         ["Hallazgos (FINDINGS)", str(len(findings))],
+        ["Puertos abiertos (nmap)", str(len(nmap_ports))],
         ["Vulnerabilidades Nuclei", str(len(nuclei_findings_list))],
         ["URLs spider", str(spider.get("total_urls", 0))],
         ["Subdominios (vhosts)", str(len(vhosts))],
@@ -1315,6 +1503,30 @@ def _build_markdown_report(report_data):
         parts.append("## Información HTTP adicional")
         parts.append("")
         parts.append(_md_table(["Categoría", "Valor"], misc_rows))
+        parts.append("")
+
+    # 4b. Nmap (puertos abiertos)
+    if nmap_ports:
+        parts.append(f"## Escaneo de puertos (Nmap) {_count_label(len(nmap_ports), 50)}")
+        parts.append("")
+        if nmap_data.get("command"):
+            parts.append(f"- **Comando:** `{nmap_data['command']}`")
+        if nmap_data.get("host"):
+            parts.append(f"- **Host:** `{nmap_data['host']}`")
+        if nmap_data.get("hostnames"):
+            parts.append(f"- **Hostnames:** {', '.join(nmap_data['hostnames'])}")
+        parts.append("")
+        nm_rows = []
+        for p in nmap_ports[:50]:
+            vparts = [p.get("product", ""), p.get("version", ""), p.get("extrainfo", "")]
+            version_str = " ".join(v for v in vparts if v).strip() or "-"
+            nm_rows.append([
+                f"{p.get('port', '-')}/{p.get('protocol', '')}",
+                str(p.get("state", "-")),
+                str(p.get("service", "") or "-"),
+                version_str,
+            ])
+        parts.append(_md_table(["Puerto", "Estado", "Servicio", "Versión"], nm_rows))
         parts.append("")
 
     # 5. Spider
@@ -1503,6 +1715,7 @@ def save_report(output_file=None):
         "total_findings": len(FINDINGS),
         "total_api_endpoints": len(SCAN_DATA.get("api_endpoints", [])),
         "total_vhosts": len(SCAN_DATA.get("vhosts", [])),
+        "total_open_ports": len((SCAN_DATA.get("nmap") or {}).get("ports", [])),
         "total_dir_hits": len(SCAN_DATA.get("directory_hits", [])),
         "injection_forms_found": SCAN_DATA.get("injection", {}).get("forms_found", 0),
         "injection_get_params_found": SCAN_DATA.get("injection", {}).get("url_params_found", 0),
@@ -1554,6 +1767,27 @@ def save_report(output_file=None):
             f.write(f"- Tecnologías: {tech_str}\n")
             f.write(f"- Métodos HTTP: {', '.join(report_data['scan_data'].get('http_methods', [])) or 'N/A'}\n")
             f.write(f"- robots/sitemap: {', '.join(report_data['scan_data'].get('robots_paths', [])) or 'N/A'}\n\n")
+
+            nmap_data = report_data['scan_data'].get('nmap') or {}
+            nmap_ports = nmap_data.get('ports') or []
+            f.write("[ESCANEO DE PUERTOS (NMAP)]\n")
+            if nmap_data.get('command'):
+                f.write(f"- Comando: {nmap_data['command']}\n")
+            if nmap_data.get('host'):
+                f.write(f"- Host: {nmap_data['host']}\n")
+            if nmap_ports:
+                for p in nmap_ports:
+                    parts = [p.get('product', ''), p.get('version', ''), p.get('extrainfo', '')]
+                    version_str = ' '.join(v for v in parts if v).strip()
+                    f.write(
+                        f"- {p.get('port')}/{p.get('protocol')} [{p.get('state', '')}] "
+                        f"{p.get('service', '') or '?'}"
+                        + (f" — {version_str}" if version_str else "")
+                        + "\n"
+                    )
+            else:
+                f.write("- Sin puertos visibles\n")
+            f.write("\n")
 
             f.write("[ENUMERACIÓN]\n")
             f.write(f"- Usuarios: {', '.join(report_data['scan_data'].get('users', [])) or 'N/A'}\n")
@@ -4013,6 +4247,7 @@ def _has_scan_data():
         bool(SCAN_DATA.get("spider")),
         bool(SCAN_DATA.get("nuclei_findings")),
         bool((SCAN_DATA.get("source_code_analysis") or {}).get("findings")),
+        bool((SCAN_DATA.get("nmap") or {}).get("ports")),
     ])
 
 def show_menu():
@@ -4032,19 +4267,20 @@ def show_menu():
     print("=" * 52)
     print(" 1. Configurar autenticación (login)")
     print(" 2. Información general y enumeración")
-    print(" 3. Análisis de vulnerabilidades con Nuclei")
-    print(" 4. Fuzzing de subdominios (vhost) con ffuf")
-    print(" 5. Fuzzing de directorios (usa ffuf si está instalado)")
-    print(" 6. Spidering / Mapeo completo del sitio")
-    print(" 7. Análisis de código fuente (credenciales/secretos en HTML y JS)")
-    print(" 8. Pruebas de inyección (SQLi, XSS, Path Traversal, Command Injection)")
-    print(" 9. Pruebas de API (descubrimiento, IDOR, mass assignment)")
-    print("10. Enumeración de usuarios/emails y fuerza bruta de contraseñas")
-    print("11. PENTESTING COMPLETO (ejecuta todas las pruebas anteriores)")
+    print(" 3. Escaneo de puertos con Nmap (-sV)")
+    print(" 4. Análisis de vulnerabilidades con Nuclei")
+    print(" 5. Fuzzing de subdominios (vhost) con ffuf")
+    print(" 6. Fuzzing de directorios (usa ffuf si está instalado)")
+    print(" 7. Spidering / Mapeo completo del sitio")
+    print(" 8. Análisis de código fuente (credenciales/secretos en HTML y JS)")
+    print(" 9. Pruebas de inyección (SQLi, XSS, Path Traversal, Command Injection)")
+    print("10. Pruebas de API (descubrimiento, IDOR, mass assignment)")
+    print("11. Enumeración de usuarios/emails y fuerza bruta de contraseñas")
+    print("12. PENTESTING COMPLETO (ejecuta todas las pruebas anteriores)")
     if _has_scan_data():
-        print("12. Mostrar resumen en Markdown")
-        print("13. Mostrar tablas de resultados (formato visual)")
-    print("14. Salir")
+        print("13. Mostrar resumen en Markdown")
+        print("14. Mostrar tablas de resultados (formato visual)")
+    print("15. Salir")
     print("="*50)
 
 def run_information_gathering(target, session):
@@ -4363,6 +4599,8 @@ def print_final_summary(target):
     http_methods = SCAN_DATA.get("http_methods") or []
     src_code = SCAN_DATA.get("source_code_analysis") or {}
     src_findings = src_code.get("findings") or []
+    nmap_data = SCAN_DATA.get("nmap") or {}
+    nmap_ports = nmap_data.get("ports") or []
 
     # 1. Resumen ejecutivo
     overview_rows = [
@@ -4371,6 +4609,7 @@ def print_final_summary(target):
         ["Servidor", _trim(general.get("server", "-"), 90)],
         ["Tecnologías", _trim(_join_safe(general.get("technologies", [])) or "-", 90)],
         ["Hallazgos (FINDINGS)", str(len(FINDINGS))],
+        ["Puertos abiertos (nmap)", str(len(nmap_ports))],
         ["Vulnerabilidades Nuclei", str(len(nuclei_findings))],
         ["URLs spider", str(spider.get("total_urls", 0))],
         ["Subdominios (vhosts)", str(len(vhosts))],
@@ -4431,6 +4670,27 @@ def print_final_summary(target):
             rows=misc_rows,
             alignments=['<', '<'],
             title="Información HTTP adicional:",
+        )
+
+    # 4b. Nmap (puertos abiertos)
+    if nmap_ports:
+        STATE_COLOR = {"open": Fore.GREEN, "open|filtered": Fore.YELLOW}
+        port_rows = []
+        for p in nmap_ports[:50]:
+            color = STATE_COLOR.get(p.get("state", ""), Fore.WHITE)
+            version_parts = [p.get("product", ""), p.get("version", ""), p.get("extrainfo", "")]
+            version_str = " ".join(v for v in version_parts if v).strip() or "-"
+            port_rows.append([
+                f"{p.get('port', '-')}/{p.get('protocol', '')}",
+                f"{color}{p.get('state', '-')}{Style.RESET_ALL}",
+                _trim(p.get("service", "") or "-", 24),
+                _trim(version_str, 60),
+            ])
+        print_table(
+            headers=["Puerto", "Estado", "Servicio", "Versión"],
+            rows=port_rows,
+            alignments=['<', '<', '<', '<'],
+            title=f"Puertos abiertos (nmap) {_count_label(len(nmap_ports), len(port_rows))}:",
         )
 
     # 5. Spider
@@ -4668,19 +4928,20 @@ def run_full_pentest(target, session):
     print_phase("INICIANDO PENTESTING COMPLETO")
     # Orden según menú principal:
     run_information_gathering(target, session)         # 2
-    run_nuclei_scan(target)                            # 3
-    run_vhost_fuzzing(target, session)                 # 4
-    run_directory_fuzzing(target, session)             # 5
-    spider_urls = run_spider(target, session)          # 6
-    # 7. Análisis de código fuente sobre todas las URLs descubiertas
+    safe_execute(run_nmap_scan, target)                # 3
+    run_nuclei_scan(target)                            # 4
+    run_vhost_fuzzing(target, session)                 # 5
+    run_directory_fuzzing(target, session)             # 6
+    spider_urls = run_spider(target, session)          # 7
+    # 8. Análisis de código fuente sobre todas las URLs descubiertas
     safe_execute(
         run_source_code_analysis,
         target, session,
         urls=list(spider_urls) if spider_urls else None,
     )
-    run_injection_tests(target, session)               # 8
-    run_api_tests(target, session)                     # 9
-    run_user_enum_bruteforce(target, session)          # 10
+    run_injection_tests(target, session)               # 9
+    run_api_tests(target, session)                     # 10
+    run_user_enum_bruteforce(target, session)          # 11
     print_good("Pentesting completo finalizado.")
     print_final_summary(target)
 
@@ -4786,24 +5047,26 @@ def main():
             elif option == '2':
                 run_information_gathering(TARGET_URL, session)
             elif option == '3':
-                run_nuclei_scan(TARGET_URL)
+                run_nmap_scan(TARGET_URL)
             elif option == '4':
-                run_vhost_fuzzing(TARGET_URL, session)
+                run_nuclei_scan(TARGET_URL)
             elif option == '5':
-                run_directory_fuzzing(TARGET_URL, session)
+                run_vhost_fuzzing(TARGET_URL, session)
             elif option == '6':
-                run_spider(TARGET_URL, session)
+                run_directory_fuzzing(TARGET_URL, session)
             elif option == '7':
-                run_source_code_analysis(TARGET_URL, session)
+                run_spider(TARGET_URL, session)
             elif option == '8':
-                run_injection_tests(TARGET_URL, session)
+                run_source_code_analysis(TARGET_URL, session)
             elif option == '9':
-                run_api_tests(TARGET_URL, session)
+                run_injection_tests(TARGET_URL, session)
             elif option == '10':
-                run_user_enum_bruteforce(TARGET_URL, session)
+                run_api_tests(TARGET_URL, session)
             elif option == '11':
-                run_full_pentest(TARGET_URL, session)
+                run_user_enum_bruteforce(TARGET_URL, session)
             elif option == '12':
+                run_full_pentest(TARGET_URL, session)
+            elif option == '13':
                 if not _has_scan_data():
                     print_warning("Aún no hay datos. Ejecuta primero algún módulo o el pentesting completo.")
                 else:
@@ -4822,12 +5085,12 @@ def main():
                     print(md)
                     print("=" * 70)
                     print_good("Fin del markdown. Copia el bloque anterior.")
-            elif option == '13':
+            elif option == '14':
                 if not _has_scan_data():
                     print_warning("Aún no hay datos. Ejecuta primero algún módulo o el pentesting completo.")
                 else:
                     print_final_summary(TARGET_URL)
-            elif option == '14':
+            elif option == '15':
                 _exit_gracefully()
             else:
                 print_error("Opción no válida. Intenta de nuevo.")

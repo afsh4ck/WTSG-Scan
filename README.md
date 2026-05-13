@@ -52,6 +52,7 @@ Diseñada para security researchers y pentesters, automatiza tareas comunes de r
 - 🔍 Fuzzing rápido de directorios con **ffuf** (pre-filtrado de wordlist + baseline anti-falsos positivos)
 - 💉 Pruebas de inyección avanzadas (SQLi, XSS, LFI, RCE, Open Redirect)
 - 🔌 Detección y testing de APIs (IDOR, Mass Assignment, GraphQL, JWT, CORS)
+- 🔍 **Escaneo de puertos con Nmap** (`-sV` para detección de servicios y versiones)
 - 🌐 **Fuzzing de subdominios (vhost)** con `ffuf` y baseline `Content-Length`
 - 👤 Enumeración de usuarios y emails
 - 🔐 Fuerza bruta con **hydra** + fallback CSRF-aware y **autodetección del mensaje de error**
@@ -72,6 +73,14 @@ Diseñada para security researchers y pentesters, automatiza tareas comunes de r
 - **Análisis de cabeceras de seguridad** – HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy
 - **Seguridad de cookies** – Flags `Secure`, `HttpOnly`, `SameSite`
 - **CORS avanzado** – Wildcard + Credentials, origen reflejado, preflight con orígenes maliciosos
+
+### 🔍 Escaneo de Puertos con Nmap
+- Ejecuta `nmap -sV` sobre el host del objetivo (extraído de la URL)
+- **Auto-instalación de nmap** vía `apt` si no está presente
+- Parsing **XML** (`-oX -`) robusto: extrae puerto, protocolo, estado, servicio, producto, versión y `extrainfo`
+- Tabla visual con colores por estado (open / open|filtered) al terminar el escaneo
+- Cada puerto abierto se registra en `FINDINGS` con prefijo `[PORT]` y queda agrupado en una categoría propia en los reportes
+- Timeout configurable (600s por defecto), interrumpible con Ctrl+C
 
 ### 🛡️ Análisis de Vulnerabilidades con Nuclei
 - **Auto-instalación de Nuclei** vía `apt` si no está presente
@@ -158,6 +167,7 @@ Diseñada para security researchers y pentesters, automatiza tareas comunes de r
 |-----------|---------|----------|
 | Python | 3.8+ | ✅ Sí |
 | pip | Última | ✅ Sí |
+| nmap | Última | ❌ Opcional (auto-instalable, requerido para escaneo de puertos) |
 | nuclei | 3.x | ❌ Opcional (auto-instalable) |
 | ffuf | Última | ❌ Opcional (mejora el fuzzing) |
 | hydra | Última | ❌ Opcional (mejora el bruteforce) |
@@ -196,7 +206,7 @@ python3 wstg-scan.py
 ```bash
 # Tras los pasos de la instalación rápida:
 sudo apt update
-sudo apt install -y ffuf hydra whatweb seclists
+sudo apt install -y nmap ffuf hydra whatweb seclists
 
 # Nuclei: usa los binarios oficiales (más recientes que apt)
 GO111MODULE=on go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
@@ -265,25 +275,26 @@ developed by @afsh4ck
 ====================================================
  1. Configurar autenticación (login)
  2. Información general y enumeración
- 3. Análisis de vulnerabilidades con Nuclei
- 4. Fuzzing de subdominios (vhost) con ffuf
- 5. Fuzzing de directorios (usa ffuf si está instalado)
- 6. Spidering / Mapeo completo del sitio
- 7. Análisis de código fuente (credenciales/secretos en HTML y JS)
- 8. Pruebas de inyección (SQLi, XSS, Path Traversal, Command Injection)
- 9. Pruebas de API (descubrimiento, IDOR, mass assignment)
-10. Enumeración de usuarios/emails y fuerza bruta de contraseñas
-11. PENTESTING COMPLETO (ejecuta todas las pruebas anteriores)
-14. Salir
+ 3. Escaneo de puertos con Nmap (-sV)
+ 4. Análisis de vulnerabilidades con Nuclei
+ 5. Fuzzing de subdominios (vhost) con ffuf
+ 6. Fuzzing de directorios (usa ffuf si está instalado)
+ 7. Spidering / Mapeo completo del sitio
+ 8. Análisis de código fuente (credenciales/secretos en HTML y JS)
+ 9. Pruebas de inyección (SQLi, XSS, Path Traversal, Command Injection)
+10. Pruebas de API (descubrimiento, IDOR, mass assignment)
+11. Enumeración de usuarios/emails y fuerza bruta de contraseñas
+12. PENTESTING COMPLETO (ejecuta todas las pruebas anteriores)
+15. Salir
 ==================================================
 Selecciona una opción:
 ```
 
-> Tras ejecutar algún módulo o el pentesting completo aparecen también las opciones **12** (`Mostrar resumen en Markdown`) y **13** (`Mostrar tablas de resultados`) para revisar el resumen sin volver a escanear.
+> Tras ejecutar algún módulo o el pentesting completo aparecen también las opciones **13** (`Mostrar resumen en Markdown`) y **14** (`Mostrar tablas de resultados`) para revisar el resumen sin volver a escanear.
 
-> La opción **11** ejecuta secuencialmente: información → Nuclei → **vhost** → fuzzing dirs → spidering → **análisis de código fuente** → inyección → API → bruteforce, y muestra al final el resumen visual con todas las tablas. Al salir, se ofrece guardar el reporte.
+> La opción **12** ejecuta secuencialmente: información → **Nmap** → Nuclei → **vhost** → fuzzing dirs → spidering → **análisis de código fuente** → inyección → API → bruteforce, y muestra al final el resumen visual con todas las tablas. Al salir, se ofrece guardar el reporte.
 >
-> Las opciones **12** y **13** sirven para revisar el resumen tras un escaneo: la 12 imprime todo en Markdown (listo para pegar en GitBook/GitHub) y la 13 reimprime las tablas con el formato visual box-drawing.
+> Las opciones **13** y **14** sirven para revisar el resumen tras un escaneo: la 13 imprime todo en Markdown (listo para pegar en GitBook/GitHub) y la 14 reimprime las tablas con el formato visual box-drawing.
 
 ---
 
@@ -299,9 +310,10 @@ Los reportes se generan automáticamente en `reports/<host>/<host>.{txt,json,htm
 | `*.md`  | Resumen completo en **Markdown** estándar — copia/pega directo en GitBook, GitHub o Obsidian |
 
 ### Estructura del reporte HTML
-- **Resumen** – KPIs (hallazgos, tecnologías, endpoints, vhosts, directorios, usuarios, credenciales, **hallazgos en código fuente**)
+- **Resumen** – KPIs (hallazgos, tecnologías, endpoints, vhosts, **puertos**, directorios, usuarios, credenciales, **hallazgos en código fuente**)
 - **Información general** – Server, status, tecnologías (chips), usuarios y emails
-- **Hallazgos** – Agrupados en bloques colapsables por categoría (Vulnerabilidades / Nuclei por severidad / Subdominios / Directorios / etc.)
+- **Escaneo de puertos (Nmap)** – Tabla con `puerto / estado / servicio / versión` + comando y host usados
+- **Hallazgos** – Agrupados en bloques colapsables por categoría (Vulnerabilidades / Nuclei por severidad / Puertos / Subdominios / Directorios / etc.)
 - **Análisis Nuclei** – Resumen por severidad + tabla detallada (sin duplicados)
 - **Endpoints API descubiertos** – Tabla con status/endpoint/URL/content-type
 - **Subdominios (vhosts) descubiertos** – Tabla con status/fqdn/tamaño
