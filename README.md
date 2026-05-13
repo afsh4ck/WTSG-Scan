@@ -47,6 +47,7 @@
 
 Diseñada para security researchers y pentesters, automatiza tareas comunes de reconocimiento, análisis y testing:
 - 🕷️ Mapeo completo y exhaustivo de aplicaciones web (spidering con detección de formularios e inputs)
+- 🔬 **Análisis del código fuente** de páginas y scripts JS expuestos (credenciales, API keys, JWT, claves PEM, comentarios sensibles)
 - 🛡️ Análisis de vulnerabilidades con **Nuclei** (10.000+ templates)
 - 🔍 Fuzzing rápido de directorios con **ffuf** (pre-filtrado de wordlist + baseline anti-falsos positivos)
 - 💉 Pruebas de inyección avanzadas (SQLi, XSS, LFI, RCE, Open Redirect)
@@ -85,7 +86,20 @@ Diseñada para security researchers y pentesters, automatiza tareas comunes de r
 - Detección de **formularios con inputs reales** (excluye submit/button/file)
 - Deduplicación por `(action, method, inputs)` — no infla con el form de login del navbar
 - Manejo robusto de redirecciones (`TooManyRedirects` no aborta la fase)
-- Resultados reutilizados por las pruebas de inyección
+- Resultados reutilizados por las pruebas de inyección y el análisis de código fuente
+
+### 🔬 Análisis del Código Fuente
+- **Reutiliza las URLs descubiertas por el spider** (o lanza un spider rápido si no hay datos previos)
+- Descarga el HTML de cada página y los recursos enlazados del mismo dominio: **JS, JSON, source maps (`.map`), CSS, YAML, XML, `.env`**
+- Cap de **2 MB por archivo** y `stream=True` para evitar descargas masivas
+- 15 catálogos de patrones con severidad ponderada:
+  - **Critical** – claves PEM privadas, cadenas de conexión de BD con credenciales embebidas
+  - **High** – AWS Access Key/Secret, Google API Key, GitHub/Slack/Stripe tokens, JWT, credenciales hardcoded genéricas (`password=`, `api_key=`, `bearer=`, …)
+  - **Medium** – comentarios HTML sensibles (`TODO password`, `FIXME admin`, …), Basic Auth en URL, source maps expuestos, IPs privadas (10/8, 172.16/12, 192.168/16)
+  - **Low** – rutas internas (`/admin`, `/.git`, `/.env`, `/actuator`, …), emails expuestos
+- Los hallazgos **critical/high se vuelcan a `FINDINGS`** con el prefijo `[CODE:SEV]`
+- Snippet de **contexto (±30 caracteres)** alrededor de cada coincidencia, deduplicación global por `(tipo, valor, url)`
+- Resumen por severidad, tablas visuales, exportación a TXT/JSON/MD/HTML (card dedicado en el reporte)
 
 ### 🌐 Fuzzing de Subdominios (VHost)
 - **Detección de vhosts** con `ffuf` enviando `Host: FUZZ.<dominio>`
@@ -218,6 +232,7 @@ python3 wstg-scan.py --url https://example.com --output report.html --threads 10
 | `--threads, -t` | Número de hilos (default: 5) |
 | `--timeout` | Timeout por request en segundos (default: 10) |
 | `--delay, -d` | Delay entre requests para evasión (default: 0) |
+| `--insecure, -k` | Desactiva la verificación TLS (uso en labs / certificados auto-firmados) |
 | `--no-color` | Desactiva colores ANSI |
 | `--version, -V` | Versión del scanner |
 
@@ -254,20 +269,21 @@ developed by @afsh4ck
  4. Fuzzing de subdominios (vhost) con ffuf
  5. Fuzzing de directorios (usa ffuf si está instalado)
  6. Spidering / Mapeo completo del sitio
- 7. Pruebas de inyección (SQLi, XSS, Path Traversal, Command Injection)
- 8. Pruebas de API (descubrimiento, IDOR, mass assignment)
- 9. Enumeración de usuarios/emails y fuerza bruta de contraseñas
-10. PENTESTING COMPLETO (ejecuta todas las pruebas anteriores)
-13. Salir
+ 7. Análisis de código fuente (credenciales/secretos en HTML y JS)
+ 8. Pruebas de inyección (SQLi, XSS, Path Traversal, Command Injection)
+ 9. Pruebas de API (descubrimiento, IDOR, mass assignment)
+10. Enumeración de usuarios/emails y fuerza bruta de contraseñas
+11. PENTESTING COMPLETO (ejecuta todas las pruebas anteriores)
+14. Salir
 ==================================================
 Selecciona una opción:
 ```
 
-> Tras ejecutar algún módulo o el pentesting completo aparecen también las opciones **11** (`Mostrar resumen en Markdown`) y **12** (`Mostrar tablas de resultados`) para revisar el resumen sin volver a escanear.
+> Tras ejecutar algún módulo o el pentesting completo aparecen también las opciones **12** (`Mostrar resumen en Markdown`) y **13** (`Mostrar tablas de resultados`) para revisar el resumen sin volver a escanear.
 
-> La opción **10** ejecuta secuencialmente: información → Nuclei → **vhost** → fuzzing dirs → spidering → inyección → API → bruteforce, y muestra al final el resumen visual con todas las tablas. Al salir, se ofrece guardar el reporte.
+> La opción **11** ejecuta secuencialmente: información → Nuclei → **vhost** → fuzzing dirs → spidering → **análisis de código fuente** → inyección → API → bruteforce, y muestra al final el resumen visual con todas las tablas. Al salir, se ofrece guardar el reporte.
 >
-> Las opciones **11** y **12** sirven para revisar el resumen tras un escaneo: la 11 imprime todo en Markdown (listo para pegar en GitBook/GitHub) y la 12 reimprime las tablas con el formato visual box-drawing.
+> Las opciones **12** y **13** sirven para revisar el resumen tras un escaneo: la 12 imprime todo en Markdown (listo para pegar en GitBook/GitHub) y la 13 reimprime las tablas con el formato visual box-drawing.
 
 ---
 
@@ -277,13 +293,13 @@ Los reportes se generan automáticamente en `reports/<host>/<host>.{txt,json,htm
 
 | Formato | Contenido |
 |---|---|
-| `*.txt` | Resumen plano + secciones por categoría (general, vhost, spider, API, directorios, credenciales, hallazgos, Nuclei) |
+| `*.txt` | Resumen plano + secciones por categoría (general, vhost, spider, **análisis de código fuente**, API, directorios, credenciales, hallazgos, Nuclei) |
 | `*.json` | Datos serializados completos (ideal para integración con otras herramientas) |
 | `*.html` | Reporte visual con tema **light/dark**, hallazgos agrupados por categoría, tabla detallada de Nuclei, tecnologías como chips |
 | `*.md`  | Resumen completo en **Markdown** estándar — copia/pega directo en GitBook, GitHub o Obsidian |
 
 ### Estructura del reporte HTML
-- **Resumen** – KPIs (hallazgos, tecnologías, endpoints, vhosts, directorios, usuarios, credenciales)
+- **Resumen** – KPIs (hallazgos, tecnologías, endpoints, vhosts, directorios, usuarios, credenciales, **hallazgos en código fuente**)
 - **Información general** – Server, status, tecnologías (chips), usuarios y emails
 - **Hallazgos** – Agrupados en bloques colapsables por categoría (Vulnerabilidades / Nuclei por severidad / Subdominios / Directorios / etc.)
 - **Análisis Nuclei** – Resumen por severidad + tabla detallada (sin duplicados)
@@ -292,6 +308,7 @@ Los reportes se generan automáticamente en `reports/<host>/<host>.{txt,json,htm
 - **Directorios encontrados** – Tabla con status/URL/tamaño
 - **Credenciales válidas** – Si el bruteforce tuvo éxito
 - **Spidering** – Muestra de URLs descubiertas
+- **Análisis de código fuente** – KPIs por severidad y tabla con `severidad / tipo / valor detectado / URL / contexto`
 
 ---
 
@@ -299,7 +316,7 @@ Los reportes se generan automáticamente en `reports/<host>/<host>.{txt,json,htm
 
 ### Personalizar wordlists
 
-Edita las constantes en `wstg-scanner.py`:
+Edita las constantes en `wstg-scan.py`:
 
 ```python
 SECLISTS_SMALL     = "/usr/share/seclists/Discovery/Web-Content/raft-small-directories.txt"
