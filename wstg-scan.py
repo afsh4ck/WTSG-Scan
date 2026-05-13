@@ -3952,8 +3952,8 @@ def show_menu():
         print(Fore.CYAN + DESCRIPTION + Style.RESET_ALL)
         print(Fore.GREEN + DEVELOPER + Style.RESET_ALL + "\n")
     else:
-        print(DESCRIPTION)
         print(BANNER)
+        print(DESCRIPTION)
         print(DEVELOPER + "\n")
     auth_status = (f"{Fore.GREEN}[Autenticado]{Style.RESET_ALL}" if AUTHENTICATED
                    else f"{Fore.YELLOW}[Sin autenticación]{Style.RESET_ALL}")
