@@ -1001,7 +1001,7 @@ def _build_html_report(report_data):
                 "<table><thead><tr><th>Severidad</th><th>Template</th>"
                 "<th>Nombre</th><th>URL afectada</th></tr></thead><tbody>"
             )
-            for n in sorted_findings[:500]:
+            for n in sorted_findings:
                 nuclei_html += (
                     "<tr>"
                     f"<td>{_html_escape((n.get('severity') or '').upper())}</td>"
@@ -1099,7 +1099,7 @@ def _build_html_report(report_data):
         f"<td>{_html_escape(ep.get('url', ''))}</td>"
         f"<td>{_html_escape(ep.get('content_type', ''))}</td>"
         "</tr>"
-        for ep in endpoints[:300]
+        for ep in endpoints
     ) or "<tr><td colspan='4'>Sin endpoints detectados.</td></tr>"
 
     vhost_rows = "\n".join(
@@ -1108,7 +1108,7 @@ def _build_html_report(report_data):
         f"<td>{_html_escape(v.get('fqdn') or v.get('subdomain', ''))}</td>"
         f"<td>{_html_escape(v.get('size', ''))}</td>"
         "</tr>"
-        for v in vhosts_list[:300] if isinstance(v, dict)
+        for v in vhosts_list if isinstance(v, dict)
     ) or "<tr><td colspan='3'>Sin subdominios detectados.</td></tr>"
 
     def _nmap_version(p):
@@ -1127,7 +1127,7 @@ def _build_html_report(report_data):
 
     dir_rows = ""
     if dirs:
-        for hit in dirs[:500]:
+        for hit in dirs:
             if isinstance(hit, dict):
                 dir_rows += (
                     "<tr>"
@@ -1156,7 +1156,7 @@ def _build_html_report(report_data):
     ) or "<tr><td colspan='2'>Sin credenciales válidas detectadas.</td></tr>"
 
     sample_urls_html = "\n".join(
-        f"<li>{_html_escape(u)}</li>" for u in spider.get("sample_urls", [])[:120]
+        f"<li>{_html_escape(u)}</li>" for u in spider.get("sample_urls", [])
     ) or "<li>Sin URLs capturadas.</li>"
 
     # ── Análisis de código fuente ───────────────────────────────────────
@@ -1188,7 +1188,7 @@ def _build_html_report(report_data):
                 f"<td>{_html_escape(f.get('url', ''))}</td>"
                 f"<td><code>{_html_escape(f.get('snippet', ''))}</code></td>"
                 "</tr>"
-                for f in sorted_src[:300]
+                for f in sorted_src
             )
         else:
             src_rows = "<tr><td colspan='5'>Sin hallazgos en el código fuente.</td></tr>"
@@ -1507,7 +1507,7 @@ def _build_markdown_report(report_data):
 
     # 4b. Nmap (puertos abiertos)
     if nmap_ports:
-        parts.append(f"## Escaneo de puertos (Nmap) {_count_label(len(nmap_ports), 50)}")
+        parts.append(f"## Escaneo de puertos (Nmap) ({len(nmap_ports)})")
         parts.append("")
         if nmap_data.get("command"):
             parts.append(f"- **Comando:** `{nmap_data['command']}`")
@@ -1517,7 +1517,7 @@ def _build_markdown_report(report_data):
             parts.append(f"- **Hostnames:** {', '.join(nmap_data['hostnames'])}")
         parts.append("")
         nm_rows = []
-        for p in nmap_ports[:50]:
+        for p in nmap_ports:
             vparts = [p.get("product", ""), p.get("version", ""), p.get("extrainfo", "")]
             version_str = " ".join(v for v in vparts if v).strip() or "-"
             nm_rows.append([
@@ -1542,9 +1542,9 @@ def _build_markdown_report(report_data):
         parts.append("")
         sample_urls = spider.get("sample_urls") or []
         if sample_urls:
-            parts.append(f"### Muestra de URLs descubiertas {_count_label(len(sample_urls), 30)}")
+            parts.append(f"### URLs descubiertas ({len(sample_urls)})")
             parts.append("")
-            parts.append(_md_table(["URL"], [[u] for u in sample_urls[:30]]))
+            parts.append(_md_table(["URL"], [[u] for u in sample_urls]))
             parts.append("")
 
     # 5b. Análisis de código fuente
@@ -1568,45 +1568,45 @@ def _build_markdown_report(report_data):
                 src_findings,
                 key=lambda x: SEV_ORDER.get(x.get("severity", "low"), 9),
             )
-            parts.append(f"### Detalle de hallazgos en código fuente {_count_label(len(sorted_src), 100)}")
+            parts.append(f"### Detalle de hallazgos en código fuente ({len(sorted_src)})")
             parts.append("")
             rows = [[
                 (f.get("severity") or "").upper(),
                 str(f.get("type", "-")),
                 str(f.get("value", "-")),
                 str(f.get("url", "-")),
-            ] for f in sorted_src[:100]]
+            ] for f in sorted_src]
             parts.append(_md_table(["Severidad", "Tipo", "Valor detectado", "URL"], rows))
             parts.append("")
 
     # 6a. Subdominios (vhosts)
     if vhosts:
-        parts.append(f"## Subdominios (vhosts) encontrados {_count_label(len(vhosts), 50)}")
+        parts.append(f"## Subdominios (vhosts) encontrados ({len(vhosts)})")
         parts.append("")
         rows = [[str(v.get("status", "-")),
                  str(v.get("fqdn") or v.get("subdomain", "-")),
                  str(v.get("size", "-"))]
-                for v in vhosts[:50]]
+                for v in vhosts]
         parts.append(_md_table(["Status", "VHost", "Tamaño"], rows))
         parts.append("")
 
     # 6b. Directorios
     if dir_hits:
-        parts.append(f"## Directorios encontrados {_count_label(len(dir_hits), 50)}")
+        parts.append(f"## Directorios encontrados ({len(dir_hits)})")
         parts.append("")
         rows = [[str(h.get("status", "-")), str(h.get("url", "-")), str(h.get("size", "-"))]
-                for h in dir_hits[:50]]
+                for h in dir_hits]
         parts.append(_md_table(["Status", "URL", "Tamaño"], rows))
         parts.append("")
 
     # 7. API endpoints
     if api_endpoints:
-        parts.append(f"## Endpoints API descubiertos {_count_label(len(api_endpoints), 50)}")
+        parts.append(f"## Endpoints API descubiertos ({len(api_endpoints)})")
         parts.append("")
         rows = [[str(ep.get("status", "-")),
                  str(ep.get("endpoint") or ep.get("url", "-")),
                  str(ep.get("content_type", "-"))]
-                for ep in api_endpoints[:50]]
+                for ep in api_endpoints]
         parts.append(_md_table(["Status", "Endpoint", "Content-Type"], rows))
         parts.append("")
 
@@ -1664,13 +1664,13 @@ def _build_markdown_report(report_data):
         sorted_rel = sorted(relevant_nuclei,
                             key=lambda x: (SEV_ORDER.get((x.get('severity') or 'unknown').lower(), 99),
                                            str(x.get('template_id', ''))))
-        parts.append(f"## Hallazgos Nuclei relevantes {_count_label(len(sorted_rel), 100)}")
+        parts.append(f"## Hallazgos Nuclei relevantes ({len(sorted_rel)})")
         parts.append("")
         rows = [[(n.get('severity') or '').upper(),
                  str(n.get('template_id', '-')),
                  str(n.get('name', '-')),
                  str(n.get('url', '-'))]
-                for n in sorted_rel[:100]]
+                for n in sorted_rel]
         parts.append(_md_table(["Severidad", "Template", "Nombre", "URL"], rows))
         parts.append("")
 
@@ -1686,10 +1686,10 @@ def _build_markdown_report(report_data):
         cat_rows = [[cat, str(len(cats[cat]))] for cat in sorted(cats.keys())]
         parts.append(_md_table(["Categoría", "Cantidad"], cat_rows))
         parts.append("")
-        parts.append("### Detalle de hallazgos")
+        parts.append(f"### Detalle de hallazgos ({len(findings)})")
         parts.append("")
         rows = []
-        for f in findings[:200]:
+        for f in findings:
             m = re.match(r'^\[([^\]]+)\]\s*(.*)', str(f))
             if m:
                 rows.append([m.group(1), m.group(2)])
@@ -4424,7 +4424,7 @@ def run_injection_tests(target, session):
             "url_params_found": len(url_params or []),
             "tested_get_params": [],
             "tested_form_inputs": [],
-            "forms": (forms or [])[:120],
+            "forms": list(forms or []),
         }
         if not forms and not url_params:
             print_warning("No se encontraron parámetros ni formularios para probar.")
@@ -4538,9 +4538,9 @@ def run_spider(target, session):
         "total_urls": len(urls),
         "total_params": len(params),
         "total_forms": len(forms),
-        "sample_urls": sorted(list(urls))[:120],
-        "sample_params": sorted(list(params))[:80],
-        "sample_forms": forms[:80],
+        "sample_urls": sorted(list(urls)),
+        "sample_params": sorted(list(params)),
+        "sample_forms": list(forms),
     }
     print_good(f"Total URLs descubiertas: {len(urls)}")
     if params:
@@ -4584,7 +4584,7 @@ def run_source_code_analysis(target, session, urls=None):
                     "total_urls": len(discovered),
                     "total_params": 0,
                     "total_forms": 0,
-                    "sample_urls": sorted(list(discovered))[:120],
+                    "sample_urls": sorted(list(discovered)),
                     "sample_params": [],
                     "sample_forms": [],
                 }
