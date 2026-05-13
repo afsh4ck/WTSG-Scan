@@ -83,491 +83,31 @@ try:
 except ImportError:
     HAS_COLOR = False
     class Fore:
-        RED = GREEN = YELLOW = CYAN = MAGENTA = WHITE = RESET = ''
-    Style = Fore
+        RED = GREEN = YELLOW = CYAN = MAGENTA = WHITE = BLUE = LIGHTBLACK_EX = RESET = ''
+    class Style:
+        BRIGHT = DIM = NORMAL = RESET_ALL = ''
 
 try:
     from tqdm import tqdm
     HAS_TQDM = True
 except ImportError:
     HAS_TQDM = False
-
-# ========== BANNER ==========
-BANNER = r"""
- _       __       __         _____                   
-| |     / /_____ / /_ ____ _/ ___/ _____ ____ _ ____ 
-| | /| / // ___// __// __ `/\__ \ / ___// __ `// __ \
-| |/ |/ /(__  )/ /_ / /_/ /___/ // /__ / /_/ // / / /
-|__/|__//____/ \__/ \__, //____/ \___/ \__,_//_/ /_/ 
-                   /____/                            
-"""
-DESCRIPTION = "OWASP Web Security Testing Scanner"
-DEVELOPER = "developed by @afsh4ck"
-VERSION = "1.2.0"
-
-# ========== CONFIGURACIÓN ==========
-DEFAULT_TIMEOUT = 10
-MAX_REDIRECTS = 10
-THREADS = 5
-AUTHENTICATED = False
-AUTH_SESSION = None
-TARGET_URL = ""
-REQUEST_DELAY = 0.0  # Delay entre requests (segundos)
-OUTPUT_FILE = None   # Ruta del archivo de reporte
-FINDINGS = []        # Hallazgos acumulados para el reporte
-SCAN_DATA = {
-    "general": {},
-    "robots_paths": [],
-    "http_methods": [],
-    "vhosts": [],
-    "directory_hits": [],
-    "injection": {},
-    "api_endpoints": [],
-    "users": [],
-    "emails": [],
-    "bruteforce_credentials": [],
-    "spider": {},
-    "stats": {},
-}
-
-COMMON_DIRS = [
-    "admin", "backup", "cgi-bin", "css", "js", "images", "uploads", "download",
-    "include", "inc", "config", "api", "v1", "old", "test", "dev", "hidden",
-    "robots.txt", "sitemap.xml", ".git/HEAD", ".git/config", ".env", ".env.backup",
-    "phpinfo.php", "info.php", "backup.zip", "backup.sql", "dump.sql",
-    "wp-admin", "wp-content", "administrator", "phpmyadmin", "adminer.php",
-    ".htaccess", ".htpasswd", "web.config", "crossdomain.xml", "clientaccesspolicy.xml",
-    ".well-known/security.txt", "package.json", "composer.json", "server-status"
-]
-
-SECLISTS_SMALL = "/usr/share/seclists/Discovery/Web-Content/raft-small-directories.txt"
-SECLISTS_MEDIUM = "/usr/share/seclists/Discovery/Web-Content/directory-list-lowercase-2.3-medium.txt"
-SECLISTS_PASSWORDS = "/usr/share/seclists/Passwords/xato-net-10-million-passwords-10000.txt"
-SECLISTS_DNS = "/usr/share/seclists/Discovery/DNS/namelist.txt"
-DEFAULT_PASSWORDS = [
-    "123456", "password", "123456789", "12345", "12345678", "qwerty", "abc123", "admin", "letmein", "welcome"
-]
-
-# Payloads
-SQL_PAYLOADS = [
-    "'", "''", '"', "\\", "' OR '1'='1", "' OR 1=1--",
-    "1 AND 1=1", "1 AND 1=2", "' UNION SELECT NULL--", "'; DROP TABLE users--",
-    "' OR SLEEP(5)-- ", "1' AND (SELECT * FROM (SELECT(SLEEP(5)))a)--"
-]
-
-XSS_PAYLOADS = [
-    "<script>alert('XSS')</script>", '\"> <script>alert(1)</script>',
-    "<img src=x onerror=alert(1)>", "javascript:alert('XSS')",
-    "<svg/onload=alert(1)>", "'-alert(1)-'", '"-alert(1)-"'
-]
-
-PATH_TRAVERSAL = [
-    "../../../../etc/passwd", "..\\..\\..\\windows\\win.ini",
-    "%2e%2e%2f%2e%2e%2f%2e%2e%2fetc/passwd",
-    "....//....//....//etc/passwd"
-]
-
-COMMAND_INJECT = [
-    "; ls", "| dir", "|| ping -c 1 127.0.0.1", "& whoami",
-    "$(whoami)", "`whoami`", "| net user"
-]
-
-OPEN_REDIRECT = ["https://evil.com", "//evil.com", "/redirect?url=https://evil.com"]
-
-API_ENDPOINTS = [
-    # Raíces de API
-    "/api", "/api/v1", "/api/v2", "/api/v3",
-    "/v1", "/v2", "/v3", "/rest", "/rest/v1",
-    # Recursos comunes
-    "/api/users", "/api/user", "/api/accounts", "/api/account",
-    "/api/admin", "/api/me", "/api/profile", "/api/whoami",
-    "/api/config", "/api/settings", "/api/flags", "/api/data",
-    "/api/keys", "/api/tokens", "/api/secrets", "/api/credentials",
-    "/api/debug", "/api/test", "/api/internal",
-    "/rest/users", "/rest/user", "/rest/admin", "/rest/profile",
-    # Documentación OpenAPI / Swagger
-    "/swagger", "/swagger-ui.html", "/swagger-ui/", "/swagger.json", "/swagger.yaml",
-    "/openapi.json", "/openapi.yaml",
-    "/api-docs", "/v2/api-docs", "/v3/api-docs",
-    "/redoc", "/docs", "/api/docs", "/api/swagger",
-    # GraphQL
-    "/graphql", "/graphiql", "/api/graphql", "/query", "/api/query",
-    # Spring Actuator / monitoring
-    "/actuator", "/actuator/env", "/actuator/health", "/actuator/mappings",
-    "/actuator/beans", "/actuator/httptrace", "/actuator/loggers",
-    "/health", "/metrics", "/info", "/status", "/ping",
-    # Rutas de autenticación
-    "/api/auth", "/api/login", "/api/token", "/api/refresh",
-    "/api/register", "/api/signup", 
-    # Rutas sensibles
-    "/.well-known/", "/api/version", "/api/changelog",
-    "/console", "/api/console", "/h2-console",
-]
-
-MASS_ASSIGNMENT_FIELDS = [
-    {"is_admin": True},
-    {"role": "admin"},
-    {"admin": True},
-    {"isAdmin": True},
-    {"privilege": "admin"},
-    {"user_role": "administrator"},
-    {"account_type": "premium"},
-    {"verified": True},
-    {"status": "active"},
-    {"credits": 9999},
-    {"balance": 9999},
-    {"permissions": ["admin", "superuser"]},
-]
-
-LOGIN_PATHS = [
-    "/login", "/signin", "/auth", "/logon", "/login.php", "/login.html",
-    "/user/login", "/account/login", "/admin/login", "/wp-login.php"
-]
-
-# Prefijos típicos de API que sirven de base para fuzzing recursivo
-API_BASE_PREFIXES = [
-    "/api", "/api/v1", "/api/v2", "/api/v3",
-    "/v1", "/v2", "/v3",
-    "/rest", "/rest/v1", "/rest/v2",
-    "/services", "/services/api",
-]
-
-# Recursos REST típicos. Se prueban bajo cada prefijo de API activo
-# (p. ej. /api/v1/users, /api/v1/transfer, etc.)
-API_RESOURCES = [
-    # Identidad / cuentas
-    "users", "user", "accounts", "account", "me", "profile", "whoami",
-    "auth", "login", "logout", "register", "signup", "signin",
-    "token", "tokens", "refresh", "session", "sessions",
-    "password", "reset-password", "forgot-password", "2fa", "mfa", "otp",
-    # Admin / configuración
-    "admin", "config", "settings", "flags", "feature-flags",
-    "permissions", "roles", "groups", "privileges",
-    "audit", "audit-log", "logs", "events",
-    # Datos / negocio
-    "data", "items", "products", "orders", "invoices", "payments",
-    "transactions", "transfer", "transfers", "wallets", "balance",
-    "subscriptions", "plans", "billing", "cart", "checkout",
-    "notes", "messages", "chats", "comments", "posts", "articles",
-    "files", "uploads", "documents", "attachments", "media", "images",
-    # Búsqueda / metadatos
-    "search", "filter", "query", "tags", "categories",
-    # Operacional / oculto
-    "stats", "metrics", "health", "status", "version", "info",
-    "debug", "test", "internal", "private", "hidden",
-    "keys", "secrets", "credentials", "api-keys",
-    "export", "import", "backup", "dump", "report", "reports",
-    "notifications", "webhooks", "callbacks", "subscribe",
-    "feed", "feeds", "activity", "history",
-]
-
-# ========== UTILIDADES ==========
-def clear_screen():
-    if platform.system() == "Windows":
-        os.system('cls')
-    else:
-        os.system('clear')
-
-def check_ffuf():
-    return shutil.which("ffuf") is not None
-
-def check_whatweb():
-    return shutil.which("whatweb") is not None
-
-def install_whatweb():
-    """Ofrece instalar WhatWeb via apt si no está disponible."""
-    print_warning("WhatWeb no está instalado.")
-    try:
-        resp = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Instalar WhatWeb automáticamente? (requiere sudo) [s/N]: ").strip().lower()
-    except (KeyboardInterrupt, EOFError):
-        return False
-    if resp != 's':
-        return False
-    try:
-        print_info("Ejecutando: sudo apt-get install -y whatweb")
-        ret = subprocess.run(
-            ["sudo", "apt-get", "install", "-y", "whatweb"],
-            check=True
-        )
-        if check_whatweb():
-            print_good("WhatWeb instalado correctamente.")
-            return True
-        else:
-            print_error("La instalación parece haber fallado.")
+    class tqdm:
+        def __init__(self, iterable=None, total=None, **kwargs):
+            self.iterable = iterable
+            self.total = total
+        def __iter__(self):
+            return iter(self.iterable or [])
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
             return False
-    except Exception as e:
-        print_error(f"No se pudo instalar WhatWeb: {e}")
-        return False
-
-def run_whatweb(target):
-    """Ejecuta WhatWeb y formatea su salida."""
-    if not check_whatweb():
-        if not install_whatweb():
-            return None
-
-    # Categorías de color
-    CATEGORY_COLOR = {
-        'cms':         Fore.MAGENTA,
-        'framework':   Fore.MAGENTA,
-        'language':    Fore.CYAN,
-        'server':      Fore.CYAN,
-        'javascript':  Fore.YELLOW,
-        'jquery':      Fore.YELLOW,
-        'analytics':   Fore.YELLOW,
-        'security':    Fore.GREEN,
-        'email':       Fore.WHITE,
-        'country':     Fore.WHITE,
-        'ip':          Fore.WHITE,
-        'title':       Fore.WHITE,
-        'httpserver':  Fore.CYAN,
-        'x-powered-by':Fore.CYAN,
-    }
-
-    try:
-        cmd = ["whatweb", "--color=never", target]
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=30
-        )
-        raw = result.stdout.strip()
-        if not raw:
-            print_warning("WhatWeb no devolvió resultados.")
-            return []
-
-        # WhatWeb brief format: URL [STATUS] Plugin1[val], Plugin2[val], ...
-        technologies = []
-        SEP = "─" * 60
-        print(f"\n{Fore.CYAN}{SEP}{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}  WHATWEB — Detección de tecnologías{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}{SEP}{Style.RESET_ALL}")
-
-        for line in raw.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            # Extraer plugins de la línea
-            # Formato: http://host [STATUS] Plugin1, Plugin2[value], ...
-            bracket_match = re.match(r'^(https?://\S+)\s+\[([^\]]+)\]\s*(.*)', line)
-            if not bracket_match:
-                # Línea sin parsear → mostrar cruda
-                print(f"  {line}")
-                continue
-
-            url_part    = bracket_match.group(1)
-            status_part = bracket_match.group(2)
-            plugins_raw = bracket_match.group(3)
-
-            # Color del código HTTP
-            http_code = status_part.split()[0] if status_part else ''
-            if http_code.startswith('2'):
-                sc = Fore.GREEN
-            elif http_code.startswith('3'):
-                sc = Fore.CYAN
-            elif http_code.startswith('4'):
-                sc = Fore.YELLOW
-            elif http_code.startswith('5'):
-                sc = Fore.RED
-            else:
-                sc = Fore.WHITE
-
-            print(f"  {Fore.WHITE}{url_part}{Style.RESET_ALL}  "
-                  f"{sc}[{status_part}]{Style.RESET_ALL}")
-
-            if not plugins_raw:
-                continue
-
-            # Separar plugins respetando corchetes anidados
-            plugins = []
-            depth, start = 0, 0
-            for i, ch in enumerate(plugins_raw):
-                if ch == '[':
-                    depth += 1
-                elif ch == ']':
-                    depth -= 1
-                elif ch == ',' and depth == 0:
-                    p = plugins_raw[start:i].strip()
-                    if p:
-                        plugins.append(p)
-                    start = i + 1
-            tail = plugins_raw[start:].strip()
-            if tail:
-                plugins.append(tail)
-
-            for plugin in plugins:
-                # Separar nombre del valor entre corchetes
-                pm = re.match(r'^([A-Za-z0-9_\-\./ ]+?)(?:\[(.+)\])?$', plugin, re.DOTALL)
-                if pm:
-                    name = pm.group(1).strip()
-                    value = pm.group(2).strip() if pm.group(2) else ''
-                else:
-                    name, value = plugin.strip(), ''
-                technologies.append({"name": name, "detail": value})
-                key = name.lower().replace(' ', '').replace('-', '')
-                color = next(
-                    (v for k, v in CATEGORY_COLOR.items() if k in key),
-                    Fore.WHITE
-                )
-                if value:
-                    print(f"    {color}▸ {name:<28}{Style.RESET_ALL}  "
-                          f"{Fore.WHITE}{value[:60]}{Style.RESET_ALL}")
-                else:
-                    print(f"    {color}▸ {name}{Style.RESET_ALL}")
-
-        print(f"{Fore.CYAN}{SEP}{Style.RESET_ALL}\n")
-        # Eliminar duplicados por (name, detail)
-        seen = set()
-        unique_techs = []
-        for t in technologies:
-            key = (t['name'], t['detail'])
-            if key not in seen:
-                seen.add(key)
-                unique_techs.append(t)
-        return unique_techs
-
-    except subprocess.TimeoutExpired:
-        print_error("WhatWeb tardó demasiado (timeout 30s).")
-        return None
-    except Exception as e:
-        print_error(f"Error ejecutando WhatWeb: {e}")
-        return None
-
-def check_nuclei():
-    return shutil.which("nuclei")
-
-def install_nuclei():
-    """Ofrece instalar Nuclei via apt si no está disponible."""
-    print_warning("Nuclei no está instalado.")
-    try:
-        resp = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Instalar Nuclei automáticamente? (requiere sudo) [s/N]: ").strip().lower()
-    except (KeyboardInterrupt, EOFError):
-        return False
-    if resp != 's':
-        return False
-    try:
-        print_info("Ejecutando: sudo apt-get install -y nuclei")
-        subprocess.run(["sudo", "apt-get", "install", "-y", "nuclei"], check=True)
-        if check_nuclei():
-            print_good("Nuclei instalado correctamente.")
-            return True
-        print_error("La instalación parece haber fallado.")
-        return False
-    except Exception as e:
-        print_error(f"No se pudo instalar Nuclei: {e}")
-        return False
-
-# (El resto del archivo es idéntico al original wstg-scanner.py)
-
-# Para evitar duplicar todo el contenido aquí en el parche, este archivo se creó
-# copiando el contenido completo de `wstg-scanner.py` y actualizando referencias
-# al nombre del script donde procede en la ayuda/ejemplo.
-
-if __name__ == "__main__":
-    # Para mantener el comportamiento original, importamos y ejecutamos la
-    # función `main` desde el módulo antiguo si existe en el mismo workspace.
-    try:
-        # Intentar cargar el antiguo módulo en memoria
-        import importlib.util
-        old_path = os.path.join(os.path.dirname(__file__), 'wstg-scanner.py')
-        spec = importlib.util.spec_from_file_location('wstg_scanner_module', old_path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        if hasattr(mod, 'main'):
-            mod.main()
-    except Exception:
-        # Fallback minimal behaviour
-        print("Ejecuta el script principal desde `wstg-scanner.py` o actualiza manualmente.")
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-OWASP Web Security Testing Scanner
-Web Security Testing (WSTG) Scanner - Interactive & Authenticated Edition
-Author: afsh4ck
-Description: Full web spidering, directory fuzzing (ffuf with progress), injections, API tests, user enumeration & bruteforce.
-"""
-
-import argparse
-import base64
-import getpass
-import re
-import sys
-import ssl
-import socket
-import tempfile
-import time
-import json
-import os
-import subprocess
-import shutil
-import platform
-import html
-from urllib.parse import urljoin, urlparse, parse_qs, urlunparse
-from collections import deque
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.robotparser import RobotFileParser
-
-
-# ===== INPUT CON AUTOCOMPLETADO DE RUTAS (TAB) =====
-if os.name == 'nt':
-    try:
-        from prompt_toolkit import prompt
-        from prompt_toolkit.completion import PathCompleter
-        def input_path(prompt_text):
-            return prompt(prompt_text, completer=PathCompleter(), complete_while_typing=True)
-    except ImportError:
-        def input_path(prompt_text):
-            return input(prompt_text)
-else:
-    try:
-        import readline
-        import glob
-        readline.set_history_length(100)
-        class FilePathCompleter:
-            def complete(self, text, state):
-                line = readline.get_line_buffer().split()
-                if not line:
-                    return [None][state]
-                else:
-                    matches = glob.glob(text+'*')
-                    try:
-                        return matches[state]
-                    except IndexError:
-                        return None
-        readline.set_completer_delims(' \t\n;')
-        readline.set_completer(FilePathCompleter().complete)
-        readline.parse_and_bind('tab: complete')
-        def input_path(prompt_text):
-            return input(prompt_text)
-    except ImportError:
-        def input_path(prompt_text):
-            return input(prompt_text)
-
-import requests
-from requests.packages.urllib3.exceptions import InsecureRequestWarning
-
-requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
-
-try:
-    from bs4 import BeautifulSoup
-    HAS_BS4 = True
-except ImportError:
-    HAS_BS4 = False
-    print("[!] BeautifulSoup4 no instalado. Usando parsing básico.")
-
-try:
-    from colorama import init, Fore, Style
-    init(autoreset=True)
-    HAS_COLOR = True
-except ImportError:
-    HAS_COLOR = False
-    class Fore:
-        RED = GREEN = YELLOW = CYAN = MAGENTA = WHITE = RESET = ''
-    Style = Fore
-
-try:
-    from tqdm import tqdm
-    HAS_TQDM = True
-except ImportError:
-    HAS_TQDM = False
+        def update(self, n=1):
+            pass
+        def set_postfix(self, *a, **k):
+            pass
+        def close(self):
+            pass
 
 # ========== BANNER ==========
 BANNER = r"""
@@ -591,6 +131,7 @@ AUTH_SESSION = None
 TARGET_URL = ""
 REQUEST_DELAY = 0.0  # Delay entre requests (segundos)
 OUTPUT_FILE = None   # Ruta del archivo de reporte
+VERIFY_TLS = True    # Verificación TLS (desactivable con --insecure)
 FINDINGS = []        # Hallazgos acumulados para el reporte
 SCAN_DATA = {
     "general": {},
@@ -604,6 +145,7 @@ SCAN_DATA = {
     "emails": [],
     "bruteforce_credentials": [],
     "spider": {},
+    "source_code_analysis": {},
     "stats": {},
 }
 
@@ -1269,6 +811,8 @@ def _build_html_report(report_data):
     dirs = scan_data.get("directory_hits", [])
     creds = scan_data.get("bruteforce_credentials", [])
     spider = scan_data.get("spider", {})
+    src_code = scan_data.get("source_code_analysis", {}) or {}
+    src_findings = src_code.get("findings") or []
     meta = scan_data.get("stats", {})
 
     nuclei_summary = scan_data.get('nuclei_summary', {})
@@ -1438,6 +982,51 @@ def _build_html_report(report_data):
         f"<li>{_html_escape(u)}</li>" for u in spider.get("sample_urls", [])[:120]
     ) or "<li>Sin URLs capturadas.</li>"
 
+    # ── Análisis de código fuente ───────────────────────────────────────
+    src_sev_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
+    src_html = ""
+    if src_code:
+        sev_stats = src_code.get("summary") or {}
+        sorted_src = sorted(
+            src_findings,
+            key=lambda x: src_sev_order.get((x.get("severity") or "low").lower(), 9),
+        )
+        src_kpi = (
+            "<div class='kpi'>"
+            f"<div><span class='muted'>Páginas</span><b>{src_code.get('pages_analyzed', 0)}</b></div>"
+            f"<div><span class='muted'>Recursos JS/JSON</span><b>{src_code.get('assets_analyzed', 0)}</b></div>"
+            f"<div><span class='muted'>Total</span><b>{len(src_findings)}</b></div>"
+            f"<div><span class='muted'>Critical</span><b>{sev_stats.get('critical', 0)}</b></div>"
+            f"<div><span class='muted'>High</span><b>{sev_stats.get('high', 0)}</b></div>"
+            f"<div><span class='muted'>Medium</span><b>{sev_stats.get('medium', 0)}</b></div>"
+            f"<div><span class='muted'>Low</span><b>{sev_stats.get('low', 0)}</b></div>"
+            "</div>"
+        )
+        if sorted_src:
+            src_rows = "\n".join(
+                "<tr>"
+                f"<td>{_html_escape((f.get('severity') or '').upper())}</td>"
+                f"<td>{_html_escape(f.get('type', ''))}</td>"
+                f"<td><code>{_html_escape(f.get('value', ''))}</code></td>"
+                f"<td>{_html_escape(f.get('url', ''))}</td>"
+                f"<td><code>{_html_escape(f.get('snippet', ''))}</code></td>"
+                "</tr>"
+                for f in sorted_src[:300]
+            )
+        else:
+            src_rows = "<tr><td colspan='5'>Sin hallazgos en el código fuente.</td></tr>"
+        src_html = (
+            "<div class='card' id='codigo'>"
+            "<h3>Análisis de código fuente</h3>"
+            f"{src_kpi}"
+            "<table><thead><tr>"
+            "<th>Severidad</th><th>Tipo</th><th>Valor detectado</th><th>URL</th><th>Contexto</th>"
+            "</tr></thead><tbody>"
+            f"{src_rows}"
+            "</tbody></table>"
+            "</div>"
+        )
+
     # Navegación por secciones
     nav_sections = [
         ("Resumen", "resumen"),
@@ -1448,6 +1037,7 @@ def _build_html_report(report_data):
         ("Directorios", "directorios"),
         ("Credenciales", "credenciales"),
         ("Spidering", "spidering"),
+        ("Código fuente", "codigo"),
     ]
     nav_html = "<nav class='nav-pills'>" + "\n".join(
         f"<a href='#{sec_id}' class='pill'>{sec_name}</a>" for sec_name, sec_id in nav_sections
@@ -1529,6 +1119,7 @@ def _build_html_report(report_data):
                 <div><span class="muted">Directorios</span><b>{len(dirs)}</b></div>
                 <div><span class="muted">Usuarios</span><b>{len(users)}</b></div>
                 <div><span class="muted">Credenciales</span><b>{len(creds)}</b></div>
+                <div><span class="muted">Código fuente</span><b>{len(src_findings)}</b></div>
             </div>
             <pre>{_html_escape(json.dumps(meta, indent=2, ensure_ascii=False))}</pre>
         </div>
@@ -1569,6 +1160,8 @@ def _build_html_report(report_data):
             <h3>Spidering (muestra de URLs)</h3>
             <ul>{sample_urls_html}</ul>
         </div>
+
+        {src_html}
     </div>
 
     <script>
@@ -1638,6 +1231,8 @@ def _build_markdown_report(report_data):
     creds = scan_data.get("bruteforce_credentials", []) or []
     robots_paths = scan_data.get("robots_paths", []) or []
     http_methods = scan_data.get("http_methods", []) or []
+    src_code = scan_data.get("source_code_analysis", {}) or {}
+    src_findings = src_code.get("findings") or []
 
     def _tech_str(item):
         if isinstance(item, dict):
@@ -1680,6 +1275,7 @@ def _build_markdown_report(report_data):
         ["Usuarios", str(len(users))],
         ["Emails", str(len(emails))],
         ["Credenciales válidas", str(len(creds))],
+        ["Hallazgos en código fuente", str(len(src_findings))],
     ]
     parts.append(_md_table(["Campo", "Valor"], overview_rows))
     parts.append("")
@@ -1737,6 +1333,38 @@ def _build_markdown_report(report_data):
             parts.append(f"### Muestra de URLs descubiertas {_count_label(len(sample_urls), 30)}")
             parts.append("")
             parts.append(_md_table(["URL"], [[u] for u in sample_urls[:30]]))
+            parts.append("")
+
+    # 5b. Análisis de código fuente
+    if src_code:
+        sev_stats = src_code.get("summary") or {}
+        parts.append("## Análisis de código fuente")
+        parts.append("")
+        code_overview = [
+            ["Páginas analizadas", str(src_code.get("pages_analyzed", 0))],
+            ["Recursos JS/JSON analizados", str(src_code.get("assets_analyzed", 0))],
+            ["Hallazgos totales", str(len(src_findings))],
+            ["Critical", str(sev_stats.get("critical", 0))],
+            ["High", str(sev_stats.get("high", 0))],
+            ["Medium", str(sev_stats.get("medium", 0))],
+            ["Low", str(sev_stats.get("low", 0))],
+        ]
+        parts.append(_md_table(["Métrica", "Valor"], code_overview))
+        parts.append("")
+        if src_findings:
+            sorted_src = sorted(
+                src_findings,
+                key=lambda x: SEV_ORDER.get(x.get("severity", "low"), 9),
+            )
+            parts.append(f"### Detalle de hallazgos en código fuente {_count_label(len(sorted_src), 100)}")
+            parts.append("")
+            rows = [[
+                (f.get("severity") or "").upper(),
+                str(f.get("type", "-")),
+                str(f.get("value", "-")),
+                str(f.get("url", "-")),
+            ] for f in sorted_src[:100]]
+            parts.append(_md_table(["Severidad", "Tipo", "Valor detectado", "URL"], rows))
             parts.append("")
 
     # 6a. Subdominios (vhosts)
@@ -1884,6 +1512,9 @@ def save_report(output_file=None):
         "total_emails": len(SCAN_DATA.get("emails", [])),
         "total_bruteforce_credentials": len(SCAN_DATA.get("bruteforce_credentials", [])),
         "total_spider_urls": SCAN_DATA.get("spider", {}).get("total_urls", 0),
+        "total_source_code_findings": len((SCAN_DATA.get("source_code_analysis") or {}).get("findings", [])),
+        "source_code_pages_analyzed": (SCAN_DATA.get("source_code_analysis") or {}).get("pages_analyzed", 0),
+        "source_code_assets_analyzed": (SCAN_DATA.get("source_code_analysis") or {}).get("assets_analyzed", 0),
     }
     SCAN_DATA["stats"] = scan_stats
 
@@ -1966,6 +1597,31 @@ def save_report(output_file=None):
                 f.write("- Ninguna\n")
             f.write("\n")
 
+            src_code_data = report_data['scan_data'].get('source_code_analysis') or {}
+            src_code_findings = src_code_data.get('findings') or []
+            f.write("[ANÁLISIS DE CÓDIGO FUENTE]\n")
+            f.write(f"- Páginas analizadas: {src_code_data.get('pages_analyzed', 0)}\n")
+            f.write(f"- Recursos JS/JSON analizados: {src_code_data.get('assets_analyzed', 0)}\n")
+            f.write(f"- Hallazgos: {len(src_code_findings)}\n")
+            sev_stats = src_code_data.get('summary') or {}
+            if sev_stats:
+                f.write(
+                    f"- Severidad: CRITICAL={sev_stats.get('critical',0)} "
+                    f"HIGH={sev_stats.get('high',0)} "
+                    f"MEDIUM={sev_stats.get('medium',0)} "
+                    f"LOW={sev_stats.get('low',0)}\n"
+                )
+            if src_code_findings:
+                src_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
+                for item in sorted(src_code_findings,
+                                   key=lambda x: src_order.get(x.get('severity', 'low'), 9)):
+                    f.write(
+                        f"- [{(item.get('severity') or '').upper()}] {item.get('type','')} "
+                        f"@ {item.get('url','')} | valor: {item.get('value','')}\n"
+                    )
+            else:
+                f.write("- Ninguno\n")
+            f.write("\n")
 
             f.write("[HALLAZGOS]\n")
             if FINDINGS:
@@ -2028,7 +1684,7 @@ def get_session(user_agent=None):
         'Accept-Language': 'en-US,en;q=0.5',
         'Connection': 'keep-alive',
     })
-    session.verify = False
+    session.verify = VERIFY_TLS
     session.max_redirects = MAX_REDIRECTS
     return session
 
@@ -2078,8 +1734,8 @@ def setup_authentication():
             AUTH_SESSION = temp_session
             AUTHENTICATED = True
             return
-    except:
-        pass
+    except requests.RequestException as e:
+        print_warning(f"Basic Auth no aplicable ({type(e).__name__}). Probando formularios...")
 
     try:
         resp = temp_session.get(login_url, timeout=DEFAULT_TIMEOUT)
@@ -3888,8 +3544,8 @@ def spider_website(target, session, max_pages=500, max_depth=3, use_robots=True)
             rp.read()
             robots_parser = rp
             print_info("robots.txt cargado correctamente.")
-        except:
-            print_warning("No se pudo cargar robots.txt, continuando sin restricciones.")
+        except (OSError, ValueError) as e:
+            print_warning(f"No se pudo cargar robots.txt ({type(e).__name__}: {e}). Continuando sin restricciones.")
 
     visited = set()
     urls_queue = deque()
@@ -4017,6 +3673,260 @@ def spider_website(target, session, max_pages=500, max_depth=3, use_robots=True)
         print_info(f"Formularios detectados durante el spidering: {len(forms_found)}")
     return discovered_urls, all_params, forms_found
 
+# ========== ANÁLISIS DE CÓDIGO FUENTE ==========
+# Patrones de búsqueda en el código fuente (HTML, JS, JSON, mapas, CSS).
+# Cada entrada: (severidad, etiqueta, regex compilada, requiere_value_group).
+_SRC_MAX_BYTES = 2 * 1024 * 1024   # cap por archivo (2 MB)
+_SRC_SNIPPET_CHARS = 140
+_SRC_MAX_FINDINGS_PER_FILE = 30
+
+_SOURCE_PATTERNS = [
+    ("critical", "Clave privada PEM",
+     re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----"), False),
+    ("critical", "Cadena de conexión BD con credenciales",
+     re.compile(r"\b(?:mongodb(?:\+srv)?|mysql|postgres(?:ql)?|redis|amqps?|mssql|jdbc:[a-z]+)://[^\s\"'<>]*:[^\s\"'<>@]+@[^\s\"'<>]+", re.IGNORECASE), False),
+    ("high", "AWS Access Key ID",
+     re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"), False),
+    ("high", "AWS Secret Access Key",
+     re.compile(r"(?i)aws[_\-]?(?:secret|sk)[_\-]?(?:access[_\-]?)?key[\"'\s:=]{1,8}[\"']?([A-Za-z0-9/+=]{40})"), True),
+    ("high", "Google API Key",
+     re.compile(r"\bAIza[0-9A-Za-z\-_]{35}\b"), False),
+    ("high", "GitHub token",
+     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}\b"), False),
+    ("high", "Slack token",
+     re.compile(r"\bxox[abpros]-[A-Za-z0-9\-]{10,}\b"), False),
+    ("high", "Stripe live secret key",
+     re.compile(r"\bsk_live_[0-9a-zA-Z]{20,}\b"), False),
+    ("high", "JWT token",
+     re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{4,}\b"), False),
+    ("high", "Credencial hardcoded",
+     re.compile(r"(?i)(?:password|passwd|pwd|secret|api[_\-]?key|access[_\-]?key|client[_\-]?secret|auth[_\-]?token|bearer)[\"'\s:=]{1,8}[\"']([^\"'\s]{4,80})[\"']"), True),
+    ("medium", "Basic Auth en URL",
+     re.compile(r"\bhttps?://[A-Za-z0-9._\-]+:[^\s\"'<>@/]+@[A-Za-z0-9._\-]+"), False),
+    ("medium", "Comentario HTML sensible",
+     re.compile(r"<!--[\s\S]{0,500}?(?:password|passwd|secret|token|api[_\-]?key|admin|backdoor|todo|fixme|hack|debug|backup|internal|do not commit)[\s\S]{0,500}?-->", re.IGNORECASE), False),
+    ("medium", "Source map expuesto",
+     re.compile(r"//[#@]\s*sourceMappingURL\s*=\s*([^\s\"']+)"), True),
+    ("medium", "IP privada hardcoded",
+     re.compile(r"\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b"), False),
+    ("low", "Ruta sensible referenciada",
+     re.compile(r"[\"'](/(?:admin|adminer|debug|console|h2-console|phpmyadmin|backup|backups|dump|wp-admin|actuator|internal|staging|.git|.env)[A-Za-z0-9_\-/.]*)[\"']"), True),
+    ("low", "Email expuesto",
+     re.compile(r"\b[A-Za-z0-9_.+\-]+@[A-Za-z0-9\-]+\.[A-Za-z0-9.\-]+\b"), False),
+]
+
+_SOURCE_ASSET_EXT = ('.js', '.mjs', '.jsx', '.ts', '.tsx', '.json', '.map', '.css', '.txt', '.xml', '.yml', '.yaml', '.env')
+_SOURCE_TEXT_CT = ('text/', 'application/javascript', 'application/json', 'application/xml',
+                   'application/x-yaml', 'application/yaml', 'application/octet-stream')
+
+
+def _is_source_text_response(content_type, url):
+    ct = (content_type or '').lower()
+    if any(t in ct for t in _SOURCE_TEXT_CT):
+        return True
+    path = urlparse(url).path.lower()
+    return path.endswith(_SOURCE_ASSET_EXT)
+
+
+def _download_text_capped(session, url, max_bytes=_SRC_MAX_BYTES):
+    """Descarga el cuerpo como texto con un cap de bytes (evita descargas enormes)."""
+    try:
+        resp = session.get(url, timeout=DEFAULT_TIMEOUT, stream=True, allow_redirects=True)
+    except requests.RequestException as e:
+        return None, None, str(e)
+    try:
+        if resp.status_code != 200:
+            return None, resp.headers.get('Content-Type', ''), f"status {resp.status_code}"
+        clen = resp.headers.get('Content-Length')
+        if clen and clen.isdigit() and int(clen) > max_bytes:
+            return None, resp.headers.get('Content-Type', ''), f"too large ({clen} bytes)"
+        buf = bytearray()
+        for chunk in resp.iter_content(chunk_size=16384):
+            if not chunk:
+                continue
+            buf.extend(chunk)
+            if len(buf) >= max_bytes:
+                break
+        encoding = resp.encoding or 'utf-8'
+        try:
+            text = buf.decode(encoding, errors='replace')
+        except (LookupError, TypeError):
+            text = buf.decode('utf-8', errors='replace')
+        return text, resp.headers.get('Content-Type', ''), None
+    finally:
+        try:
+            resp.close()
+        except Exception:
+            pass
+
+
+def _extract_linked_assets(html_text, base_url, base_netloc):
+    """Devuelve URLs de scripts/links/sources/.map del mismo dominio referenciados en el HTML."""
+    assets = set()
+    if not html_text:
+        return assets
+    if HAS_BS4:
+        try:
+            soup = BeautifulSoup(html_text, 'html.parser')
+            for tag in soup.find_all(['script', 'link', 'iframe', 'source', 'img', 'a']):
+                src = tag.get('src') or tag.get('href')
+                if not src:
+                    continue
+                absu = urljoin(base_url, src.strip())
+                parsed = urlparse(absu)
+                if parsed.scheme not in ('http', 'https'):
+                    continue
+                if parsed.netloc != base_netloc:
+                    continue
+                path = parsed.path.lower()
+                if path.endswith(_SOURCE_ASSET_EXT):
+                    assets.add(urlunparse(parsed._replace(fragment='')))
+        except Exception:
+            pass
+    else:
+        for m in re.finditer(r'(?:src|href)\s*=\s*["\']([^"\']+)["\']', html_text, re.IGNORECASE):
+            absu = urljoin(base_url, m.group(1).strip())
+            parsed = urlparse(absu)
+            if parsed.netloc == base_netloc and parsed.path.lower().endswith(_SOURCE_ASSET_EXT):
+                assets.add(urlunparse(parsed._replace(fragment='')))
+    return assets
+
+
+def _scan_text_for_secrets(text, source_url):
+    """Aplica los patrones del catálogo al texto y devuelve lista de hallazgos."""
+    findings = []
+    seen = set()
+    if not text:
+        return findings
+    for severity, label, regex, has_group in _SOURCE_PATTERNS:
+        try:
+            matches = list(regex.finditer(text))
+        except re.error:
+            continue
+        for m in matches:
+            value = m.group(1) if (has_group and m.lastindex) else m.group(0)
+            value = (value or "").strip()
+            if not value:
+                continue
+            if label == "Email expuesto" and value.lower().endswith(('.png', '.jpg', '.svg', '.gif', '.webp')):
+                continue
+            key = (label, value[:80].lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            start = max(0, m.start() - 30)
+            end = min(len(text), m.end() + 30)
+            snippet = text[start:end].replace('\n', ' ').replace('\r', ' ')
+            if len(snippet) > _SRC_SNIPPET_CHARS:
+                snippet = snippet[:_SRC_SNIPPET_CHARS - 3] + '...'
+            findings.append({
+                "severity": severity,
+                "type": label,
+                "url": source_url,
+                "value": value[:160],
+                "snippet": snippet,
+            })
+            if len(findings) >= _SRC_MAX_FINDINGS_PER_FILE:
+                return findings
+    return findings
+
+
+def analyze_source_code(target, session, urls=None, max_urls=120, max_assets=200):
+    """Analiza el código fuente de las URLs descubiertas en busca de credenciales y datos expuestos.
+
+    Args:
+        target: URL base (usada para deducir el dominio).
+        session: requests.Session activa (autenticada si procede).
+        urls: iterable de URLs (sample del spider). Si None, se usa solo target.
+        max_urls: máximo de páginas HTML a descargar.
+        max_assets: máximo de recursos JS/JSON/MAP a descargar.
+
+    Devuelve dict con estadísticas y lista de hallazgos.
+    """
+    base_netloc = urlparse(target).netloc
+    seed_urls = list(urls) if urls else [target]
+    if target not in seed_urls:
+        seed_urls.insert(0, target)
+    # Limitar páginas: priorizar URLs HTML
+    seed_urls = [u for u in seed_urls if urlparse(u).netloc == base_netloc][:max_urls]
+
+    print_info(f"Analizando código fuente de {len(seed_urls)} páginas (max {max_urls})...")
+
+    findings = []
+    pages_analyzed = 0
+    assets_to_scan = set()
+    pages_iter = tqdm(seed_urls, desc="Páginas", unit="pág", ncols=80,
+                      disable=not HAS_TQDM) if HAS_TQDM else seed_urls
+
+    for url in pages_iter:
+        text, content_type, err = _download_text_capped(session, url)
+        if text is None:
+            continue
+        pages_analyzed += 1
+        if 'html' in (content_type or '').lower() or '<html' in text[:2000].lower():
+            assets_to_scan.update(_extract_linked_assets(text, url, base_netloc))
+        findings.extend(_scan_text_for_secrets(text, url))
+
+    # Limitar recursos analizados
+    assets_list = list(assets_to_scan)[:max_assets]
+    if assets_list:
+        print_info(f"Analizando {len(assets_list)} recursos JS/JSON/MAP enlazados...")
+    assets_iter = tqdm(assets_list, desc="Recursos", unit="archivo", ncols=80,
+                       disable=not HAS_TQDM) if HAS_TQDM else assets_list
+    assets_analyzed = 0
+    for asset_url in assets_iter:
+        text, content_type, err = _download_text_capped(session, asset_url)
+        if text is None:
+            continue
+        if not _is_source_text_response(content_type, asset_url):
+            continue
+        assets_analyzed += 1
+        findings.extend(_scan_text_for_secrets(text, asset_url))
+
+    # Deduplicar globalmente
+    seen = set()
+    unique_findings = []
+    for f in findings:
+        key = (f["type"], (f.get("value") or "")[:80].lower(), f.get("url"))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_findings.append(f)
+
+    # Resumen por severidad
+    sev_count = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    for f in unique_findings:
+        sev_count[f["severity"]] = sev_count.get(f["severity"], 0) + 1
+
+    # Volcar hallazgos críticos/altos a FINDINGS globales
+    for f in unique_findings:
+        if f["severity"] in ("critical", "high"):
+            FINDINGS.append(
+                f"[CODE:{f['severity'].upper()}] {f['type']} en {f['url']} "
+                f"— valor: {f['value']}"
+            )
+
+    if unique_findings:
+        print_good(
+            f"Análisis de código fuente completado: {len(unique_findings)} hallazgos "
+            f"(C:{sev_count.get('critical',0)} H:{sev_count.get('high',0)} "
+            f"M:{sev_count.get('medium',0)} L:{sev_count.get('low',0)}) "
+            f"sobre {pages_analyzed} páginas + {assets_analyzed} recursos."
+        )
+    else:
+        print_info(
+            f"Análisis de código fuente completado sin hallazgos "
+            f"({pages_analyzed} páginas, {assets_analyzed} recursos)."
+        )
+
+    return {
+        "pages_analyzed": pages_analyzed,
+        "assets_analyzed": assets_analyzed,
+        "total_findings": len(unique_findings),
+        "summary": sev_count,
+        "findings": unique_findings,
+    }
+
 # ========== MENÚ PRINCIPAL ==========
 def _has_scan_data():
     """True si se ha ejecutado al menos un módulo y hay datos para reportar."""
@@ -4032,6 +3942,7 @@ def _has_scan_data():
         bool(SCAN_DATA.get("bruteforce_credentials")),
         bool(SCAN_DATA.get("spider")),
         bool(SCAN_DATA.get("nuclei_findings")),
+        bool((SCAN_DATA.get("source_code_analysis") or {}).get("findings")),
     ])
 
 def show_menu():
@@ -4055,14 +3966,15 @@ def show_menu():
     print(" 4. Fuzzing de subdominios (vhost) con ffuf")
     print(" 5. Fuzzing de directorios (usa ffuf si está instalado)")
     print(" 6. Spidering / Mapeo completo del sitio")
-    print(" 7. Pruebas de inyección (SQLi, XSS, Path Traversal, Command Injection)")
-    print(" 8. Pruebas de API (descubrimiento, IDOR, mass assignment)")
-    print(" 9. Enumeración de usuarios/emails y fuerza bruta de contraseñas")
-    print("10. PENTESTING COMPLETO (ejecuta todas las pruebas anteriores)")
+    print(" 7. Análisis de código fuente (credenciales/secretos en HTML y JS)")
+    print(" 8. Pruebas de inyección (SQLi, XSS, Path Traversal, Command Injection)")
+    print(" 9. Pruebas de API (descubrimiento, IDOR, mass assignment)")
+    print("10. Enumeración de usuarios/emails y fuerza bruta de contraseñas")
+    print("11. PENTESTING COMPLETO (ejecuta todas las pruebas anteriores)")
     if _has_scan_data():
-        print("11. Mostrar resumen en Markdown")
-        print("12. Mostrar tablas de resultados (formato visual)")
-    print("13. Salir")
+        print("12. Mostrar resumen en Markdown")
+        print("13. Mostrar tablas de resultados (formato visual)")
+    print("14. Salir")
     print("="*50)
 
 def run_information_gathering(target, session):
@@ -4286,6 +4198,47 @@ def run_spider(target, session):
             for url in sorted(urls):
                 f.write(url + '\n')
         print_good(f"URLs guardadas en {filename}")
+    return urls
+
+def run_source_code_analysis(target, session, urls=None):
+    """Analiza el código fuente de las páginas accesibles en busca de credenciales y scripts expuestos.
+
+    Si no se proporciona `urls`, intenta reutilizar las URLs muestreadas en SCAN_DATA["spider"];
+    si tampoco existen, ofrece ejecutar un spider rápido o analizar solo el target.
+    """
+    print_phase("ANÁLISIS DE CÓDIGO FUENTE")
+    if urls is None:
+        sample = (SCAN_DATA.get("spider") or {}).get("sample_urls") or []
+        if sample:
+            urls = list(sample)
+            print_info(f"Usando {len(urls)} URLs del último spider.")
+        else:
+            try:
+                ans = input(
+                    f"{Fore.YELLOW}[?]{Style.RESET_ALL} No hay spider previo. "
+                    f"¿Ejecutar spider rápido (max 50 páginas)? [S/n]: "
+                ).strip().lower()
+            except (KeyboardInterrupt, EOFError):
+                ans = 'n'
+            if ans != 'n':
+                discovered, _params, _forms = spider_website(
+                    target, session, max_pages=50, max_depth=2, use_robots=True
+                )
+                SCAN_DATA["spider"] = {
+                    "total_urls": len(discovered),
+                    "total_params": 0,
+                    "total_forms": 0,
+                    "sample_urls": sorted(list(discovered))[:120],
+                    "sample_params": [],
+                    "sample_forms": [],
+                }
+                urls = list(discovered)
+            else:
+                print_warning("Analizando solo la URL objetivo.")
+                urls = [target]
+    result = analyze_source_code(target, session, urls=urls)
+    SCAN_DATA["source_code_analysis"] = result
+    return result
 
 def print_final_summary(target):
     """Imprime una recopilación final con todas las tablas de SCAN_DATA y FINDINGS.
@@ -4338,6 +4291,8 @@ def print_final_summary(target):
     creds = SCAN_DATA.get("bruteforce_credentials") or []
     robots_paths = SCAN_DATA.get("robots_paths") or []
     http_methods = SCAN_DATA.get("http_methods") or []
+    src_code = SCAN_DATA.get("source_code_analysis") or {}
+    src_findings = src_code.get("findings") or []
 
     # 1. Resumen ejecutivo
     overview_rows = [
@@ -4354,6 +4309,7 @@ def print_final_summary(target):
         ["Usuarios", str(len(users))],
         ["Emails", str(len(emails))],
         ["Credenciales válidas", str(len(creds))],
+        ["Hallazgos en código fuente", str(len(src_findings))],
     ]
     print_table(
         headers=["Campo", "Valor"],
@@ -4428,6 +4384,46 @@ def print_final_summary(target):
                 rows=url_rows,
                 alignments=['<'],
                 title=f"Muestra de URLs descubiertas {_count_label(spider.get('total_urls', 0), len(url_rows))}:",
+            )
+
+    # 5b. Análisis de código fuente
+    if src_code:
+        sev_stats = src_code.get("summary") or {}
+        code_overview = [
+            ["Páginas analizadas", str(src_code.get("pages_analyzed", 0))],
+            ["Recursos JS/JSON analizados", str(src_code.get("assets_analyzed", 0))],
+            ["Hallazgos totales", str(len(src_findings))],
+            [f"{Fore.MAGENTA}Critical{Style.RESET_ALL}", str(sev_stats.get("critical", 0))],
+            [f"{Fore.RED}High{Style.RESET_ALL}", str(sev_stats.get("high", 0))],
+            [f"{Fore.YELLOW}Medium{Style.RESET_ALL}", str(sev_stats.get("medium", 0))],
+            [f"{Fore.CYAN}Low{Style.RESET_ALL}", str(sev_stats.get("low", 0))],
+        ]
+        print_table(
+            headers=["Métrica", "Valor"],
+            rows=code_overview,
+            alignments=['<', '>'],
+            title="Análisis de código fuente:",
+        )
+        if src_findings:
+            sorted_src = sorted(
+                src_findings,
+                key=lambda x: SEV_ORDER.get(x.get("severity", "low"), 9),
+            )
+            code_rows = []
+            for f in sorted_src[:30]:
+                sev = f.get("severity", "low")
+                color = SEV_COLOR.get(sev, Fore.WHITE)
+                code_rows.append([
+                    f"{color}{sev.upper()}{Style.RESET_ALL}",
+                    _trim(f.get("type", "-"), 30),
+                    _trim(f.get("value", "-"), 40),
+                    _trim(f.get("url", "-"), 60),
+                ])
+            print_table(
+                headers=["Severidad", "Tipo", "Valor detectado", "URL"],
+                rows=code_rows,
+                alignments=['<', '<', '<', '<'],
+                title=f"Hallazgos en código fuente {_count_label(len(sorted_src), len(code_rows))}:",
             )
 
     # 6a. Subdominios (vhosts)
@@ -4605,20 +4601,26 @@ def run_full_pentest(target, session):
     run_nuclei_scan(target)                            # 3
     run_vhost_fuzzing(target, session)                 # 4
     run_directory_fuzzing(target, session)             # 5
-    run_spider(target, session)                        # 6
-    run_injection_tests(target, session)               # 7
-    run_api_tests(target, session)                     # 8
-    run_user_enum_bruteforce(target, session)          # 9
+    spider_urls = run_spider(target, session)          # 6
+    # 7. Análisis de código fuente sobre todas las URLs descubiertas
+    safe_execute(
+        run_source_code_analysis,
+        target, session,
+        urls=list(spider_urls) if spider_urls else None,
+    )
+    run_injection_tests(target, session)               # 8
+    run_api_tests(target, session)                     # 9
+    run_user_enum_bruteforce(target, session)          # 10
     print_good("Pentesting completo finalizado.")
     print_final_summary(target)
 
 def main():
-    global TARGET_URL, AUTHENTICATED, AUTH_SESSION, THREADS, DEFAULT_TIMEOUT, REQUEST_DELAY, OUTPUT_FILE
+    global TARGET_URL, AUTHENTICATED, AUTH_SESSION, THREADS, DEFAULT_TIMEOUT, REQUEST_DELAY, OUTPUT_FILE, VERIFY_TLS
 
     parser = argparse.ArgumentParser(
         description=f"WSTG Scanner v{VERSION} - OWASP Web Security Testing Scanner",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Ejemplo: python3 wstg-scanner.py --url https://example.com --output report.txt"
+        epilog="Ejemplo: python3 wstg-scan.py --url https://example.com --output report.txt"
     )
     parser.add_argument('--url', '-u', metavar='URL',
                         help='URL objetivo (omitir para modo interactivo)')
@@ -4630,6 +4632,8 @@ def main():
                         help=f'Timeout por request en segundos (default: {DEFAULT_TIMEOUT})')
     parser.add_argument('--delay', '-d', type=float, default=0.0, metavar='S',
                         help='Delay entre requests en segundos para evasión (default: 0)')
+    parser.add_argument('--insecure', '-k', action='store_true',
+                        help='Desactivar verificación de certificados TLS (uso en labs / entornos de prueba)')
     parser.add_argument('--no-color', action='store_true',
                         help='Desactivar colores en la salida')
     parser.add_argument('--version', '-V', action='version', version=f'WSTG Scanner v{VERSION}')
@@ -4639,6 +4643,7 @@ def main():
     DEFAULT_TIMEOUT = args.timeout
     REQUEST_DELAY = args.delay
     OUTPUT_FILE = args.output
+    VERIFY_TLS = not args.insecure
 
     if args.no_color:
         global HAS_COLOR
@@ -4653,6 +4658,9 @@ def main():
         print(BANNER)
         print(DESCRIPTION)
         print(DEVELOPER + "\n")
+
+    if not VERIFY_TLS:
+        print_warning("Verificación TLS desactivada (--insecure). Solo para entornos de prueba.")
 
     if args.url:
         TARGET_URL = normalize_url(args.url)
@@ -4716,14 +4724,16 @@ def main():
             elif option == '6':
                 run_spider(TARGET_URL, session)
             elif option == '7':
-                run_injection_tests(TARGET_URL, session)
+                run_source_code_analysis(TARGET_URL, session)
             elif option == '8':
-                run_api_tests(TARGET_URL, session)
+                run_injection_tests(TARGET_URL, session)
             elif option == '9':
-                run_user_enum_bruteforce(TARGET_URL, session)
+                run_api_tests(TARGET_URL, session)
             elif option == '10':
-                run_full_pentest(TARGET_URL, session)
+                run_user_enum_bruteforce(TARGET_URL, session)
             elif option == '11':
+                run_full_pentest(TARGET_URL, session)
+            elif option == '12':
                 if not _has_scan_data():
                     print_warning("Aún no hay datos. Ejecuta primero algún módulo o el pentesting completo.")
                 else:
@@ -4742,12 +4752,12 @@ def main():
                     print(md)
                     print("=" * 70)
                     print_good("Fin del markdown. Copia el bloque anterior.")
-            elif option == '12':
+            elif option == '13':
                 if not _has_scan_data():
                     print_warning("Aún no hay datos. Ejecuta primero algún módulo o el pentesting completo.")
                 else:
                     print_final_summary(TARGET_URL)
-            elif option == '13':
+            elif option == '14':
                 _exit_gracefully()
             else:
                 print_error("Opción no válida. Intenta de nuevo.")
