@@ -3704,7 +3704,21 @@ _SOURCE_PATTERNS = [
     ("medium", "Basic Auth en URL",
      re.compile(r"\bhttps?://[A-Za-z0-9._\-]+:[^\s\"'<>@/]+@[A-Za-z0-9._\-]+"), False),
     ("medium", "Comentario HTML sensible",
-     re.compile(r"<!--[\s\S]{0,500}?(?:password|passwd|secret|token|api[_\-]?key|admin|backdoor|todo|fixme|hack|debug|backup|internal|do not commit)[\s\S]{0,500}?-->", re.IGNORECASE), False),
+     re.compile(
+         r"<!--\s*("
+         # Contenido del comentario que NO atraviesa '-->'
+         r"(?:(?!-->)[\s\S]){0,400}"
+         # Palabra clave realmente sensible
+         r"(?:password|passwd|pwd|secret|api[_\-]?key|access[_\-]?key|"
+         r"private[_\-]?key|client[_\-]?secret|auth[_\-]?token|bearer|"
+         r"credentials|hardcoded|backdoor|deprecated|do not commit|"
+         r"todo[: ]|fixme[: ]|xxx[: ]|hack[: ]|"
+         r"backup\s+(?:file|path|server|db)|"
+         r"internal\s+(?:use|api|server|tool)|"
+         r"debug\s+(?:enabled|mode|key|token))"
+         r"(?:(?!-->)[\s\S]){0,400}"
+         r")\s*-->",
+         re.IGNORECASE), True),
     ("medium", "Source map expuesto",
      re.compile(r"//[#@]\s*sourceMappingURL\s*=\s*([^\s\"']+)"), True),
     ("medium", "IP privada hardcoded",
@@ -3810,6 +3824,25 @@ def _scan_text_for_secrets(text, source_url):
                 continue
             if label == "Email expuesto" and value.lower().endswith(('.png', '.jpg', '.svg', '.gif', '.webp')):
                 continue
+            # Filtro de boilerplate UI para comentarios HTML: si el comentario
+            # es claramente decorativo (footer/header/logo/...) sin contenido
+            # realmente sensible alrededor, descartarlo.
+            if label == "Comentario HTML sensible":
+                low = value.lower()
+                ui_only = ("footer", "header", "navbar", "nav bar", "sidebar",
+                           "logo", "icon", "button", "banner", "carousel",
+                           "modal", "tooltip", "dropdown", "breadcrumb",
+                           "container", "wrapper", "section start", "section end",
+                           "begin block", "end block", "content start", "content end")
+                # Si el comentario contiene alguna keyword UI y NO contiene
+                # ninguna palabra realmente sensible (password/secret/token/...),
+                # ignorarlo.
+                strong = ("password", "passwd", "secret", "api_key", "api-key",
+                          "apikey", "private_key", "private-key", "access_key",
+                          "access-key", "auth_token", "auth-token", "bearer ",
+                          "credentials", "hardcoded", "backdoor", "do not commit")
+                if any(u in low for u in ui_only) and not any(s in low for s in strong):
+                    continue
             key = (label, value[:80].lower())
             if key in seen:
                 continue
