@@ -2100,7 +2100,8 @@ def check_http_methods(target, session):
         print_error(f"Error en check_http_methods: {e}")
         return []
 
-def vhost_bruteforce(target, session, base_domain, wordlist=None, threads=THREADS, use_ffuf=True):
+def vhost_bruteforce(target, session, base_domain, wordlist=None, threads=THREADS,
+                     use_ffuf=True, request_timeout=5, rate=0):
     """Fuzzing de subdominios (virtual hosts) usando ffuf con técnica de Content-Length.
 
     Manda una request con Host inválido (defnotvalid.<base_domain>) para obtener la
@@ -2144,6 +2145,28 @@ def vhost_bruteforce(target, session, base_domain, wordlist=None, threads=THREAD
             print_warning(f"No se pudo calcular baseline ({e}); ffuf no filtrará por tamaño.")
 
         if use_ffuf and check_ffuf():
+            # Contar entradas válidas de la wordlist para informar al usuario
+            wl_count = 0
+            try:
+                with open(wordlist, 'r', encoding='utf-8', errors='ignore') as wlf:
+                    for line in wlf:
+                        s = line.strip()
+                        if s and not s.startswith('#'):
+                            wl_count += 1
+            except Exception:
+                pass
+            if wl_count:
+                # ETA aproximado: cada hilo procesa ~10 req/s en promedio
+                est_seconds = max(1, int(wl_count / max(1, threads * 10)))
+                est_min = est_seconds // 60
+                eta = f"~{est_min}m" if est_min >= 1 else f"~{est_seconds}s"
+                print_info(f"Wordlist: {wl_count:,} entradas · threads: {threads} · timeout: {request_timeout}s · ETA: {eta}")
+                if wl_count > 50_000 and threads < 40:
+                    print_warning(
+                        f"Wordlist grande ({wl_count:,}) con pocos threads ({threads}). "
+                        "Considera Ctrl+C y subir threads o usar una wordlist más corta."
+                    )
+
             tmp_fd, tmp_path = tempfile.mkstemp(suffix='.json')
             os.close(tmp_fd)
             ffuf_cmd = [
@@ -2152,11 +2175,14 @@ def vhost_bruteforce(target, session, base_domain, wordlist=None, threads=THREAD
                 "-u", target.rstrip('/') + '/',
                 "-H", f"Host: FUZZ.{base_domain}",
                 "-t", str(threads),
+                "-timeout", str(request_timeout),
                 "-o", tmp_path, "-of", "json",
             ]
+            if rate and rate > 0:
+                ffuf_cmd += ["-rate", str(rate)]
             if baseline_size is not None:
                 ffuf_cmd += ["-fs", str(baseline_size)]
-            print_info(f"Ejecutando: {' '.join(ffuf_cmd[:9])} ...")
+            print_info(f"Ejecutando: {' '.join(ffuf_cmd[:11])} ...")
             print()
             process = None
             try:
@@ -4342,8 +4368,32 @@ def run_vhost_fuzzing(target, session):
     else:
         use_ffuf = False
         print_warning("ffuf no está instalado. Usando método interno.")
+    # Para vhost fuzzing, el cuello de botella es el RTT del servidor (no CPU
+    # local), así que conviene un default alto. El usuario puede bajarlo si
+    # el target tiene WAF/rate-limiting.
+    default_threads = max(THREADS, 50)
+    t_in = input(
+        f"{Fore.YELLOW}[?]{Style.RESET_ALL} Threads [{default_threads}]: "
+    ).strip()
+    try:
+        vhost_threads = int(t_in) if t_in else default_threads
+        if vhost_threads < 1:
+            vhost_threads = default_threads
+    except ValueError:
+        vhost_threads = default_threads
+    timeout_in = input(
+        f"{Fore.YELLOW}[?]{Style.RESET_ALL} Timeout por request en segundos [5]: "
+    ).strip()
+    try:
+        req_timeout = int(timeout_in) if timeout_in else 5
+        if req_timeout < 1:
+            req_timeout = 5
+    except ValueError:
+        req_timeout = 5
     hits = vhost_bruteforce(target, session, base_domain,
-                            wordlist=wordlist, threads=THREADS, use_ffuf=use_ffuf) or []
+                            wordlist=wordlist, threads=vhost_threads,
+                            request_timeout=req_timeout,
+                            use_ffuf=use_ffuf) or []
     SCAN_DATA["vhosts"] = hits
 
 def run_directory_fuzzing(target, session):
