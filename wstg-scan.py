@@ -3913,6 +3913,43 @@ def analyze_source_code(target, session, urls=None, max_urls=120, max_assets=200
             f"M:{sev_count.get('medium',0)} L:{sev_count.get('low',0)}) "
             f"sobre {pages_analyzed} páginas + {assets_analyzed} recursos."
         )
+        # Tabla visual con los primeros 50 hallazgos ordenados por severidad
+        SEV_ORDER = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
+        SEV_COLOR = {
+            'critical': Fore.MAGENTA, 'high': Fore.RED,
+            'medium': Fore.YELLOW,   'low': Fore.CYAN,
+        }
+        sorted_findings = sorted(
+            unique_findings,
+            key=lambda x: (SEV_ORDER.get(x.get('severity', 'low'), 99),
+                           x.get('type', ''), x.get('url', ''))
+        )
+        shown = sorted_findings[:50]
+        rows = []
+        for f in shown:
+            sev = f.get('severity', 'low')
+            color = SEV_COLOR.get(sev, Fore.WHITE)
+            tipo = (f.get('type') or '-')[:30]
+            url = f.get('url') or '-'
+            if len(url) > 60:
+                url = url[:57] + '...'
+            value = (f.get('value') or '-').replace('\n', ' ').replace('\r', ' ')
+            if len(value) > 50:
+                value = value[:47] + '...'
+            rows.append([
+                f"{color}{sev.upper()}{Style.RESET_ALL}",
+                tipo, url, value,
+            ])
+        if len(unique_findings) <= 50:
+            title = f"Hallazgos del análisis de código ({len(unique_findings)}):"
+        else:
+            title = f"Hallazgos del análisis de código (top 50 de {len(unique_findings)}):"
+        print_table(
+            headers=["SEVERIDAD", "TIPO", "URL", "VALOR"],
+            rows=rows,
+            alignments=['<', '<', '<', '<'],
+            title=title,
+        )
     else:
         print_info(
             f"Análisis de código fuente completado sin hallazgos "
