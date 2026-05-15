@@ -54,6 +54,8 @@ Diseñada para bug bounty hunters y pentesters, automatiza tareas comunes de rec
 - 🔌 Detección y testing de APIs (IDOR, Mass Assignment, GraphQL, JWT, CORS)
 - 🔍 **Escaneo de puertos con Nmap** (`-sV` para detección de servicios y versiones)
 - 🌐 **Fuzzing de subdominios (vhost)** con `ffuf` y baseline `Content-Length`
+ - 🌐 **Fuzzing de subdominios (vhost)** con `ffuf` y baseline `Content-Length`
+ - 🧩 **WordPress / WPScan** – Integración opcional con `wpscan` para enumeración de usuarios, detección de plugins/themes vulnerables y ataques dirigidos a instalaciones WordPress.
 - 👤 Enumeración de usuarios y emails
 - 🔐 Fuerza bruta con **hydra** + fallback CSRF-aware y **autodetección del mensaje de error**
 - 📊 Reportes en **TXT, JSON, HTML y Markdown** (con tema light/dark, hallazgos agrupados por categoría)
@@ -133,6 +135,45 @@ Diseñada para bug bounty hunters y pentesters, automatiza tareas comunes de rec
 - **Open Redirect** – Detección de redirecciones a hosts arbitrarios
 - Reutiliza los formularios e inputs detectados por el spider (eficiente)
 
+---
+
+## 🐘 WordPress & WPScan
+
+Si trabajas con objetivos WordPress, `WPScan` es una herramienta complementaria muy útil para enumeración y pruebas dirigidas. `WSTG Scanner` soporta integración manual (ejecuta `wpscan` por separado y añade los resultados a los reportes), y en futuras versiones se puede automatizar la ejecución desde el propio script.
+
+Qué puedes hacer con `wpscan`:
+- Enumerar usuarios descubiertos y rutas de login.
+- Detectar versiones de core, plugins y temas.
+- Buscar vulnerabilidades conocidas (CVE) en plugins/themes.
+- Realizar fuerza bruta del login con wordlists.
+
+Instalación rápida:
+
+```bash
+sudo apt install wpscan
+# o via gem:
+sudo gem install wpscan
+```
+
+Ejemplos básicos:
+
+```bash
+# Enumeración básica (plugins/themes/users)
+wpscan --url https://target.example.com --enumerate ap,at,u
+
+# Fuerza bruta con wordlist
+wpscan --url https://target.example.com --usernames admin --passwords /path/to/passwords.txt
+
+# Guardar en JSON para importar al reporte
+wpscan --url https://target.example.com -o wpscan-output.json --format json
+```
+
+Integración con `WSTG Scanner`:
+- Ejecuta `wpscan` y guarda `wpscan-output.json` en `reports/<host>/` para conservar los hallazgos.
+- Si quieres que automatice la ejecución de `wpscan` desde `wstg-scan.py`, puedo añadir esa opción (parseo JSON y volcado a `FINDINGS`).
+
+Advertencia legal:
+- Solo ejecuta `wpscan` contra objetivos para los que tengas permiso explícito.
 ### 🔌 Testing de APIs (OWASP API Top 10)
 - **Descubrimiento de endpoints** (`/api`, `/swagger`, `/graphql`, `/actuator`, etc.) y parsing de OpenAPI
 - **IDOR / BOLA (API1)** – Modificación de IDs numéricos, UUID y parámetros
@@ -172,6 +213,7 @@ Diseñada para bug bounty hunters y pentesters, automatiza tareas comunes de rec
 | ffuf | Última | ❌ Opcional (mejora el fuzzing) |
 | hydra | Última | ❌ Opcional (mejora el bruteforce) |
 | whatweb | Última | ❌ Opcional (mejora fingerprinting) |
+| wpscan | Última | ❌ Opcional (enumeración y ataques WordPress) |
 | SecLists | Última | ❌ Opcional (wordlists) |
 
 ### Requisitos del Sistema
