@@ -45,7 +45,7 @@
 
 **WSTG Scanner** es una herramienta de pentesting web **interactiva y comprehensiva** que implementa las mejores prácticas del [OWASP Web Security Testing Guide](https://owasp.org/www-project-web-security-testing-guide/) y el [OWASP API Top 10](https://owasp.org/API-Security/).
 
-Diseñada para security researchers y pentesters, automatiza tareas comunes de reconocimiento, análisis y testing:
+Diseñada para bug bounty hunters y pentesters, automatiza tareas comunes de reconocimiento, análisis y pentesting web:
 - 🕷️ Mapeo completo y exhaustivo de aplicaciones web (spidering con detección de formularios e inputs)
 - 🔬 **Análisis del código fuente** de páginas y scripts JS expuestos (credenciales, API keys, JWT, claves PEM, comentarios sensibles)
 - 🛡️ Análisis de vulnerabilidades con **Nuclei** (10.000+ templates)
