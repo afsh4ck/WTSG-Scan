@@ -4350,13 +4350,16 @@ def _merge_credentials(global_key, credentials):
     SCAN_DATA[global_key] = merged
     return merged
 
-def run_wpscan_enumeration(target, session, wpscan_path, api_token=None, threads=5):
+def run_wpscan_enumeration(target, session, wpscan_path, api_token=None, threads=5, request_timeout=15):
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix="wpscan_enum_")
     os.close(tmp_fd)
+    # Usar enumerate explícito para evitar ambigüedades con versiones de WPScan
+    enum_flags = "u,ap,at"
     cmd = [
         wpscan_path,
         "--url", target,
-        "--enumerate",
+        "--enumerate", enum_flags,
+        "--request-timeout", str(max(5, int(request_timeout or 15))),
         "--format", "json",
         "--output", tmp_path,
         "--no-banner",
@@ -4370,15 +4373,40 @@ def run_wpscan_enumeration(target, session, wpscan_path, api_token=None, threads
     if not VERIFY_TLS:
         cmd += ["--disable-tls-checks"]
 
-    print_info(f"Ejecutando: {_format_external_command(cmd)}")
+    def _run_cmd(cmd_list):
+        print_info(f"Ejecutando: {_format_external_command(cmd_list)}")
+        proc = subprocess.Popen(cmd_list, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        out = _stream_process_output(proc)
+        proc.wait()
+        return proc.returncode, out
+
     process = None
     stdout_text = ""
     rc = None
     try:
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        stdout_text = _stream_process_output(process)
-        process.wait()
-        rc = process.returncode
+        rc, stdout_text = _run_cmd(cmd)
+        # Si WPScan falla con código 4 (fallo de detección / TLS / red), intentar reintento con flags más laxos
+        if rc == 4:
+            print_warning("WPScan retornó código 4 — reintentando con opciones más tolerantes (follow-redirects, random UA, disable tls checks)...")
+            retry_cmd = list(cmd)
+            if "--disable-tls-checks" not in retry_cmd:
+                retry_cmd += ["--disable-tls-checks"]
+            if "--random-user-agent" not in retry_cmd:
+                retry_cmd += ["--random-user-agent"]
+            if "--follow-redirection" not in retry_cmd:
+                retry_cmd += ["--follow-redirection"]
+            # aumentar timeout para el retry
+            # reemplazar request-timeout si existe
+            if "--request-timeout" in retry_cmd:
+                idx = retry_cmd.index("--request-timeout")
+                retry_cmd[idx+1] = str(max(30, int(request_timeout or 15)))
+            else:
+                retry_cmd += ["--request-timeout", str(max(30, int(request_timeout or 15)))]
+            rc2, out2 = _run_cmd(retry_cmd)
+            # preferir la salida del retry si produjo algo
+            if out2:
+                stdout_text = out2
+            rc = rc2
     except KeyboardInterrupt:
         print_warning("WPScan interrumpido; esperando a que guarde resultados parciales...")
         _wait_for_interrupted_child(process, "wpscan")
@@ -4497,7 +4525,7 @@ def run_wordpress_attacks(target, session):
             api_token = ""
 
     enum_threads = max(5, THREADS)
-    scan = run_wpscan_enumeration(target, session, wpscan_path, api_token=api_token, threads=enum_threads)
+    scan = run_wpscan_enumeration(target, session, wpscan_path, api_token=api_token, threads=enum_threads, request_timeout=max(15, DEFAULT_TIMEOUT))
     SCAN_DATA["wordpress"] = scan
 
     version = scan.get("version") or {}
