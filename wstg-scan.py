@@ -12,6 +12,7 @@ import argparse
 import base64
 import getpass
 import re
+import signal
 import sys
 import ssl
 import socket
@@ -145,6 +146,7 @@ SCAN_DATA = {
     "users": [],
     "emails": [],
     "bruteforce_credentials": [],
+    "wordpress": {},
     "spider": {},
     "source_code_analysis": {},
     "stats": {},
@@ -163,6 +165,8 @@ COMMON_DIRS = [
 SECLISTS_SMALL = "/usr/share/seclists/Discovery/Web-Content/raft-small-directories.txt"
 SECLISTS_MEDIUM = "/usr/share/seclists/Discovery/Web-Content/directory-list-lowercase-2.3-medium.txt"
 SECLISTS_PASSWORDS = "/usr/share/seclists/Passwords/xato-net-10-million-passwords-10000.txt"
+ROCKYOU_WORDLIST = "/usr/share/wordlists/rockyou.txt"
+ROCKYOU_WORDLIST_GZ = "/usr/share/wordlists/rockyou.txt.gz"
 SECLISTS_DNS = "/usr/share/seclists/Discovery/DNS/namelist.txt"
 DEFAULT_PASSWORDS = [
     "123456", "password", "123456789", "12345", "12345678", "qwerty", "abc123", "admin", "letmein", "welcome"
@@ -291,6 +295,80 @@ def clear_screen():
 def check_ffuf():
     return shutil.which("ffuf") is not None
 
+def check_wpscan():
+    return shutil.which("wpscan")
+
+def install_wpscan():
+    """Ofrece instalar WPScan con gem si no esta disponible."""
+    print_warning("WPScan no esta instalado o no esta en PATH.")
+    if os.name == 'nt':
+        print_info("Instalalo manualmente con Ruby/Gem o ejecuta el scanner desde Kali/WSL: gem install wpscan")
+        return False
+    try:
+        print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Instalar WPScan automaticamente con sudo gem install wpscan? [s/N]:")
+        resp = input("> ").strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        return False
+    if resp != 's':
+        return False
+    try:
+        print_info("Ejecutando: sudo gem install wpscan")
+        subprocess.run(["sudo", "gem", "install", "wpscan"], check=True)
+        if check_wpscan():
+            print_good("WPScan instalado correctamente.")
+            return True
+        print_error("La instalacion parece haber fallado.")
+        return False
+    except Exception as e:
+        print_error(f"No se pudo instalar WPScan: {e}")
+        return False
+
+def _wait_for_interrupted_child(process, name="proceso", grace_seconds=5):
+    """Give an interrupted child process time to flush files before killing it."""
+    if not process:
+        return None
+    if process.poll() is not None:
+        return process.returncode
+
+    try:
+        return process.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        pass
+
+    if os.name != 'nt' and process.poll() is None:
+        try:
+            process.send_signal(signal.SIGINT)
+            return process.wait(timeout=2)
+        except Exception:
+            pass
+
+    if process.poll() is None:
+        print_warning(f"{name} no terminó tras Ctrl+C; terminando proceso.")
+        try:
+            process.terminate()
+            return process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            try:
+                return process.wait(timeout=2)
+            except Exception:
+                return process.returncode
+        except Exception:
+            return process.returncode
+    return process.returncode
+
+def _load_ffuf_json_results(path):
+    if not path or not os.path.isfile(path) or os.path.getsize(path) <= 2:
+        return []
+    with open(path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    if isinstance(data, dict):
+        results = data.get('results', [])
+        return results if isinstance(results, list) else []
+    if isinstance(data, list):
+        return data
+    return []
+
 def check_whatweb():
     return shutil.which("whatweb") is not None
 
@@ -298,7 +376,8 @@ def install_whatweb():
     """Ofrece instalar WhatWeb via apt si no está disponible."""
     print_warning("WhatWeb no está instalado.")
     try:
-        resp = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Instalar WhatWeb automáticamente? (requiere sudo) [s/N]: ").strip().lower()
+        print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Instalar WhatWeb automáticamente? (requiere sudo) [s/N]:")
+        resp = input("> ").strip().lower()
     except (KeyboardInterrupt, EOFError):
         return False
     if resp != 's':
@@ -458,7 +537,8 @@ def install_nmap():
     """Ofrece instalar nmap vía apt si no está disponible."""
     print_warning("nmap no está instalado.")
     try:
-        resp = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Instalar nmap automáticamente? (requiere sudo) [s/N]: ").strip().lower()
+        print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Instalar nmap automáticamente? (requiere sudo) [s/N]:")
+        resp = input("> ").strip().lower()
     except (KeyboardInterrupt, EOFError):
         return False
     if resp != 's':
@@ -499,9 +579,10 @@ def run_nmap_scan(target):
     print_info(f"Ejecutando: nmap -sV {host}")
     print()
     try:
+        # Aumentado timeout porque 600s puede quedarse corto en targets con muchos puertos
         proc = subprocess.run(
             [nmap_path, "-sV", "-oX", "-", host],
-            capture_output=True, text=True, timeout=600
+            capture_output=True, text=True, timeout=1800
         )
     except subprocess.TimeoutExpired:
         print_error("nmap excedió el timeout de 600s.")
@@ -615,7 +696,8 @@ def install_nuclei():
     """Ofrece instalar Nuclei via apt si no está disponible."""
     print_warning("Nuclei no está instalado.")
     try:
-        resp = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Instalar Nuclei automáticamente? (requiere sudo) [s/N]: ").strip().lower()
+        print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Instalar Nuclei automáticamente? (requiere sudo) [s/N]:")
+        resp = input("> ").strip().lower()
     except (KeyboardInterrupt, EOFError):
         return False
     if resp != 's':
@@ -970,6 +1052,7 @@ def _build_html_report(report_data):
     nmap_ports = nmap_data.get("ports", []) or []
     dirs = scan_data.get("directory_hits", [])
     creds = scan_data.get("bruteforce_credentials", [])
+    wordpress = scan_data.get("wordpress", {}) or {}
     spider = scan_data.get("spider", {})
     src_code = scan_data.get("source_code_analysis", {}) or {}
     src_findings = src_code.get("findings") or []
@@ -1030,6 +1113,10 @@ def _build_html_report(report_data):
             return "Subdominios (vhosts)"
         if s.startswith('[PORT]'):
             return "Puertos abiertos (Nmap)"
+        if s.startswith('[WP'):
+            return "WordPress"
+        if s.startswith('[CRED'):
+            return "Credenciales"
         return "Otros"
 
     CAT_ORDER = [
@@ -1037,6 +1124,8 @@ def _build_html_report(report_data):
         "Nuclei — CRITICAL", "Nuclei — HIGH", "Nuclei — MEDIUM",
         "Nuclei — LOW", "Nuclei — INFO", "Nuclei — UNKNOWN",
         "Puertos abiertos (Nmap)",
+        "WordPress",
+        "Credenciales",
         "Subdominios (vhosts)",
         "Directorios / Endpoints",
         "Otros",
@@ -1204,6 +1293,55 @@ def _build_html_report(report_data):
             "</div>"
         )
 
+    # WordPress / WPScan
+    wordpress_html = ""
+    if wordpress:
+        wp_version = wordpress.get("version") or {}
+        wp_theme = wordpress.get("main_theme") or {}
+        wp_users = wordpress.get("users") or []
+        wp_plugins = wordpress.get("plugins") or []
+        wp_vulns = wordpress.get("vulnerabilities") or []
+        wp_creds = wordpress.get("credentials") or []
+        wp_user_rows = "\n".join(
+            "<tr>"
+            f"<td>{_html_escape(u.get('username', ''))}</td>"
+            f"<td>{_html_escape(u.get('name', '') or '')}</td>"
+            f"<td>{_html_escape(u.get('found_by', '') or '')}</td>"
+            "</tr>"
+            for u in wp_users if isinstance(u, dict)
+        ) or "<tr><td colspan='3'>Sin usuarios WordPress detectados.</td></tr>"
+        wp_vuln_rows = "\n".join(
+            "<tr>"
+            f"<td>{_html_escape(v.get('component_type', ''))}</td>"
+            f"<td>{_html_escape(v.get('component', ''))}</td>"
+            f"<td>{_html_escape(v.get('title', ''))}</td>"
+            f"<td>{_html_escape(v.get('fixed_in', ''))}</td>"
+            "</tr>"
+            for v in wp_vulns if isinstance(v, dict)
+        ) or "<tr><td colspan='4'>Sin vulnerabilidades WordPress reportadas.</td></tr>"
+        wordpress_html = (
+            "<div class='card' id='wordpress'>"
+            "<h3>WordPress / WPScan</h3>"
+            "<div class='kpi'>"
+            f"<div><span class='muted'>Detectado</span><b>{'Si' if wordpress.get('detected') else 'No'}</b></div>"
+            f"<div><span class='muted'>Version</span><b>{_html_escape(wp_version.get('number') or '-')}</b></div>"
+            f"<div><span class='muted'>Plugins</span><b>{len(wp_plugins)}</b></div>"
+            f"<div><span class='muted'>Usuarios</span><b>{len(wp_users)}</b></div>"
+            f"<div><span class='muted'>Vulns</span><b>{len(wp_vulns)}</b></div>"
+            f"<div><span class='muted'>Credenciales</span><b>{len(wp_creds)}</b></div>"
+            "</div>"
+            f"<p><b>Tema principal:</b> {_html_escape(wp_theme.get('name') or '-')}</p>"
+            "<h4>Usuarios</h4>"
+            "<table><thead><tr><th>Usuario</th><th>Nombre</th><th>Encontrado por</th></tr></thead><tbody>"
+            f"{wp_user_rows}"
+            "</tbody></table>"
+            "<h4>Vulnerabilidades</h4>"
+            "<table><thead><tr><th>Tipo</th><th>Componente</th><th>Titulo</th><th>Fixed in</th></tr></thead><tbody>"
+            f"{wp_vuln_rows}"
+            "</tbody></table>"
+            "</div>"
+        )
+
     # Navegación por secciones
     nav_sections = [
         ("Resumen", "resumen"),
@@ -1213,6 +1351,7 @@ def _build_html_report(report_data):
         ("API", "api"),
         ("Subdominios", "vhosts"),
         ("Directorios", "directorios"),
+        ("WordPress", "wordpress"),
         ("Credenciales", "credenciales"),
         ("Spidering", "spidering"),
         ("Código fuente", "codigo"),
@@ -1298,6 +1437,7 @@ def _build_html_report(report_data):
                 <div><span class="muted">Directorios</span><b>{len(dirs)}</b></div>
                 <div><span class="muted">Usuarios</span><b>{len(users)}</b></div>
                 <div><span class="muted">Credenciales</span><b>{len(creds)}</b></div>
+                <div><span class="muted">WordPress vulns</span><b>{len(wordpress.get('vulnerabilities') or [])}</b></div>
                 <div><span class="muted">Código fuente</span><b>{len(src_findings)}</b></div>
             </div>
             <pre>{_html_escape(json.dumps(meta, indent=2, ensure_ascii=False))}</pre>
@@ -1335,6 +1475,8 @@ def _build_html_report(report_data):
             <h3>Directorios/archivos descubiertos</h3>
             <table><thead><tr><th>Status</th><th>URL</th><th>Tamaño</th></tr></thead><tbody>{dir_rows}</tbody></table>
         </div>
+
+        {wordpress_html}
 
         <div class=\"card\" id='credenciales'>
             <h3>Credenciales válidas (bruteforce)</h3>
@@ -1414,6 +1556,7 @@ def _build_markdown_report(report_data):
     users = scan_data.get("users", []) or []
     emails = scan_data.get("emails", []) or []
     creds = scan_data.get("bruteforce_credentials", []) or []
+    wordpress = scan_data.get("wordpress", {}) or {}
     robots_paths = scan_data.get("robots_paths", []) or []
     http_methods = scan_data.get("http_methods", []) or []
     src_code = scan_data.get("source_code_analysis", {}) or {}
@@ -1463,6 +1606,7 @@ def _build_markdown_report(report_data):
         ["Usuarios", str(len(users))],
         ["Emails", str(len(emails))],
         ["Credenciales válidas", str(len(creds))],
+        ["WordPress vulnerabilidades", str(len(wordpress.get("vulnerabilities") or []))],
         ["Hallazgos en código fuente", str(len(src_findings))],
     ]
     parts.append(_md_table(["Campo", "Valor"], overview_rows))
@@ -1599,6 +1743,45 @@ def _build_markdown_report(report_data):
         parts.append(_md_table(["Status", "URL", "Tamaño"], rows))
         parts.append("")
 
+    # 6c. WordPress / WPScan
+    if wordpress:
+        wp_version = wordpress.get("version") or {}
+        wp_theme = wordpress.get("main_theme") or {}
+        wp_users = wordpress.get("users") or []
+        wp_plugins = wordpress.get("plugins") or []
+        wp_vulns = wordpress.get("vulnerabilities") or []
+        wp_creds = wordpress.get("credentials") or []
+        parts.append("## WordPress / WPScan")
+        parts.append("")
+        wp_rows = [
+            ["Detectado", "Sí" if wordpress.get("detected") else "No confirmado"],
+            ["Versión", str(wp_version.get("number") or "-")],
+            ["Estado versión", str(wp_version.get("status") or "-")],
+            ["Tema principal", str(wp_theme.get("name") or "-")],
+            ["Plugins detectados", str(len(wp_plugins))],
+            ["Usuarios WPScan", str(len(wp_users))],
+            ["Vulnerabilidades", str(len(wp_vulns))],
+            ["Credenciales WP", str(len(wp_creds))],
+        ]
+        parts.append(_md_table(["Campo", "Valor"], wp_rows))
+        parts.append("")
+        if wp_users:
+            parts.append("### Usuarios WordPress")
+            parts.append("")
+            parts.append(_md_table(["Usuario", "Nombre"], [[u.get("username", "-"), u.get("name", "-")] for u in wp_users]))
+            parts.append("")
+        if wp_vulns:
+            parts.append("### Vulnerabilidades WordPress")
+            parts.append("")
+            rows = [[
+                v.get("component_type", "-"),
+                v.get("component", "-"),
+                v.get("title", "-"),
+                v.get("fixed_in", "-"),
+            ] for v in wp_vulns]
+            parts.append(_md_table(["Tipo", "Componente", "Título", "Fixed in"], rows))
+            parts.append("")
+
     # 7. API endpoints
     if api_endpoints:
         parts.append(f"## Endpoints API descubiertos ({len(api_endpoints)})")
@@ -1724,6 +1907,10 @@ def save_report(output_file=None):
         "total_users": len(SCAN_DATA.get("users", [])),
         "total_emails": len(SCAN_DATA.get("emails", [])),
         "total_bruteforce_credentials": len(SCAN_DATA.get("bruteforce_credentials", [])),
+        "wordpress_detected": bool((SCAN_DATA.get("wordpress") or {}).get("detected")),
+        "wordpress_users": len((SCAN_DATA.get("wordpress") or {}).get("users", [])),
+        "wordpress_vulnerabilities": len((SCAN_DATA.get("wordpress") or {}).get("vulnerabilities", [])),
+        "wordpress_credentials": len((SCAN_DATA.get("wordpress") or {}).get("credentials", [])),
         "total_spider_urls": SCAN_DATA.get("spider", {}).get("total_urls", 0),
         "total_source_code_findings": len((SCAN_DATA.get("source_code_analysis") or {}).get("findings", [])),
         "source_code_pages_analyzed": (SCAN_DATA.get("source_code_analysis") or {}).get("pages_analyzed", 0),
@@ -1792,6 +1979,34 @@ def save_report(output_file=None):
             f.write("[ENUMERACIÓN]\n")
             f.write(f"- Usuarios: {', '.join(report_data['scan_data'].get('users', [])) or 'N/A'}\n")
             f.write(f"- Emails: {', '.join(report_data['scan_data'].get('emails', [])) or 'N/A'}\n\n")
+
+            wordpress_data = report_data['scan_data'].get('wordpress') or {}
+            f.write("[WORDPRESS / WPSCAN]\n")
+            if wordpress_data:
+                wp_version = wordpress_data.get('version') or {}
+                wp_theme = wordpress_data.get('main_theme') or {}
+                f.write(f"- Detectado: {'Si' if wordpress_data.get('detected') else 'No confirmado'}\n")
+                f.write(f"- Version: {wp_version.get('number') or 'N/A'} ({wp_version.get('status') or 'estado desconocido'})\n")
+                f.write(f"- Tema principal: {wp_theme.get('name') or 'N/A'}\n")
+                f.write(f"- Plugins detectados: {len(wordpress_data.get('plugins') or [])}\n")
+                f.write(f"- Usuarios WPScan: {', '.join(u.get('username','') for u in wordpress_data.get('users', []) if isinstance(u, dict)) or 'N/A'}\n")
+                wp_vulns = wordpress_data.get('vulnerabilities') or []
+                f.write(f"- Vulnerabilidades: {len(wp_vulns)}\n")
+                for vuln in wp_vulns:
+                    f.write(
+                        f"  * [{vuln.get('component_type')}] {vuln.get('component')}: "
+                        f"{vuln.get('title')}"
+                        + (f" (fixed in {vuln.get('fixed_in')})" if vuln.get('fixed_in') else "")
+                        + "\n"
+                    )
+                wp_creds = wordpress_data.get('credentials') or []
+                if wp_creds:
+                    f.write("- Credenciales WPScan:\n")
+                    for cred in wp_creds:
+                        f.write(f"  * {cred.get('username')}:{cred.get('password')}\n")
+            else:
+                f.write("- No ejecutado\n")
+            f.write("\n")
 
             spider = report_data["scan_data"].get("spider", {})
             f.write("[SPIDERING]\n")
@@ -1952,13 +2167,16 @@ def check_seclists():
 def setup_authentication():
     global AUTHENTICATED, AUTH_SESSION, TARGET_URL
     print_info("Configuración de autenticación")
-    login_url = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} URL de login (dejar vacío si es la misma que la objetivo): ").strip()
+    print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} URL de login (dejar vacío si es la misma que la objetivo):")
+    login_url = input("> ").strip()
     if not login_url:
         login_url = TARGET_URL
     else:
         login_url = normalize_url(login_url)
-    username = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Usuario: ")
-    password = getpass.getpass(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Contraseña: ")
+    print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Usuario:")
+    username = input("> ")
+    print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Contraseña:")
+    password = getpass.getpass("> ")
 
     temp_session = get_session()
     try:
@@ -2101,12 +2319,12 @@ def check_http_methods(target, session):
         return []
 
 def vhost_bruteforce(target, session, base_domain, wordlist=None, threads=THREADS,
-                     use_ffuf=True, request_timeout=5, rate=0):
+                     use_ffuf=True, request_timeout=5, rate=0, use_fs_filter=True):
     """Fuzzing de subdominios (virtual hosts) usando ffuf con técnica de Content-Length.
 
     Manda una request con Host inválido (defnotvalid.<base_domain>) para obtener la
-    longitud baseline de "no encontrado" y luego ffuf filtra por -fs <baseline>
-    descartando todas las respuestas que coincidan.
+    longitud baseline de "no encontrado" y, si `use_fs_filter` es True, ffuf filtra
+    por `-fs <baseline>` descartando todas las respuestas que coincidan.
     """
     results = []
     try:
@@ -2180,7 +2398,7 @@ def vhost_bruteforce(target, session, base_domain, wordlist=None, threads=THREAD
             ]
             if rate and rate > 0:
                 ffuf_cmd += ["-rate", str(rate)]
-            if baseline_size is not None:
+            if baseline_size is not None and use_fs_filter:
                 ffuf_cmd += ["-fs", str(baseline_size)]
             print_info(f"Ejecutando: {' '.join(ffuf_cmd[:11])} ...")
             print()
@@ -2193,9 +2411,7 @@ def vhost_bruteforce(target, session, base_domain, wordlist=None, threads=THREAD
 
                 if os.path.isfile(tmp_path) and os.path.getsize(tmp_path) > 2:
                     try:
-                        with open(tmp_path, 'r', encoding='utf-8') as f:
-                            data = json.load(f)
-                        hits = data.get('results', [])
+                        hits = _load_ffuf_json_results(tmp_path)
                         STATUS_COLOR = {
                             200: Fore.GREEN, 201: Fore.GREEN, 204: Fore.GREEN,
                             301: Fore.CYAN,  302: Fore.CYAN,  307: Fore.CYAN, 308: Fore.CYAN,
@@ -2240,9 +2456,30 @@ def vhost_bruteforce(target, session, base_domain, wordlist=None, threads=THREAD
                 if rc not in (0, 1):
                     print_error(f"ffuf terminó con código {rc}")
             except KeyboardInterrupt:
+                print_warning("Fuzzing de subdominios interrumpido por el usuario; esperando a que ffuf guarde resultados parciales...")
                 if process:
-                    process.terminate()
-                print_warning("Fuzzing de subdominios interrumpido por el usuario")
+                    _wait_for_interrupted_child(process, "ffuf")
+                try:
+                    existing = {(item.get('fqdn'), item.get('status')) for item in results}
+                    for hit in sorted(_load_ffuf_json_results(tmp_path), key=lambda x: (x.get('status', 0), x.get('input', {}).get('FUZZ', ''))):
+                        sub = hit.get('input', {}).get('FUZZ', '')
+                        status = hit.get('status', 0)
+                        size = hit.get('length', 0)
+                        fqdn = f"{sub}.{base_domain}"
+                        key = (fqdn, status)
+                        if key in existing:
+                            continue
+                        existing.add(key)
+                        results.append({
+                            'subdomain': sub,
+                            'fqdn': fqdn,
+                            'status': status,
+                            'size': size,
+                        })
+                        FINDINGS.append(f"[VHOST] {fqdn} [{status}]")
+                except Exception as e:
+                    print_error(f"Error leyendo JSON parcial de ffuf: {e}")
+                print_good(f"Se han guardado {len(results)} vhosts encontrados hasta el momento.")
                 SCAN_DATA["vhosts"] = results
                 return results
             except Exception as e:
@@ -2273,7 +2510,7 @@ def vhost_bruteforce(target, session, base_domain, wordlist=None, threads=THREAD
                                 timeout=DEFAULT_TIMEOUT, allow_redirects=False)
                 cl = r.headers.get('Content-Length')
                 size = int(cl) if cl and cl.isdigit() else len(r.content)
-                if baseline_size is not None and size == baseline_size:
+                if baseline_size is not None and use_fs_filter and size == baseline_size:
                     return None
                 return (sub, fqdn, r.status_code, size)
             except Exception:
@@ -2372,9 +2609,7 @@ def dir_bruteforce(target, session, wordlist=None, threads=THREADS, use_ffuf=Tru
                 # ── Leer resultados limpios desde el JSON ─────────────────────
                 if os.path.isfile(tmp_path) and os.path.getsize(tmp_path) > 2:
                     try:
-                        with open(tmp_path, 'r', encoding='utf-8') as f:
-                            data = json.load(f)
-                        hits = data.get('results', [])
+                        hits = _load_ffuf_json_results(tmp_path)
 
                         STATUS_COLOR = {
                             200: Fore.GREEN,  201: Fore.GREEN,  204: Fore.GREEN,
@@ -2418,9 +2653,24 @@ def dir_bruteforce(target, session, wordlist=None, threads=THREADS, use_ffuf=Tru
                     print_error(f"ffuf terminó con código {rc}")
 
             except KeyboardInterrupt:
+                print_warning("Fuzzing interrumpido por el usuario; esperando a que ffuf guarde resultados parciales...")
                 if process:
-                    process.terminate()
-                print_warning("Fuzzing interrumpido por el usuario")
+                    _wait_for_interrupted_child(process, "ffuf")
+                try:
+                    existing = {(item.get('url'), item.get('status')) for item in results}
+                    for hit in sorted(_load_ffuf_json_results(tmp_path), key=lambda x: (x.get('status', 0), x.get('input', {}).get('FUZZ', ''))):
+                        path = hit.get('input', {}).get('FUZZ', '') or hit.get('url', '')
+                        status = hit.get('status', 0)
+                        size = hit.get('length', 0)
+                        url_hit = hit.get('url', urljoin(target, path))
+                        key = (url_hit, status)
+                        if key in existing:
+                            continue
+                        existing.add(key)
+                        results.append({'url': url_hit, 'status': status, 'size': size})
+                        FINDINGS.append(f"[DIR] {url_hit} [{status}]")
+                except Exception as e:
+                    print_error(f"Error leyendo JSON parcial de ffuf: {e}")
                 # Guardar resultados parciales en SCAN_DATA (mutación, no necesita global)
                 SCAN_DATA["directory_hits"] = results
                 print_good(f"Se han guardado {len(results)} directorios encontrados hasta el momento.")
@@ -3296,15 +3546,18 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
         use_hydra = False
         hydra_path = shutil.which("hydra")
         if hydra_path:
-            resp = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Usar hydra para el bruteforce? [S/n]: ").strip().lower()
+            print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Usar hydra para el bruteforce? [S/n]:")
+            resp = input("> ").strip().lower()
             use_hydra = (resp != 'n')
         else:
             print_warning("hydra no está instalado o no está en PATH. Usando método interno.")
 
-        login_url = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Introduce la URL real del login (dejar vacío para autodetección): ").strip()
+        print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Introduce la URL real del login (dejar vacío para autodetección):")
+        login_url = input("> ").strip()
         print_info("El mensaje de error de login mejora MUCHO la precisión (evita falsos positivos).")
         print_info("Si lo dejas vacío, se intentará autodetectar enviando credenciales imposibles.")
-        error_msg = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Mensaje de error exacto de login fallido (vacío = autodetectar): ").strip()
+        print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Mensaje de error exacto de login fallido (vacío = autodetectar):")
+        error_msg = input("> ").strip()
         # Flag para endurecer la heurística cuando no haya error_msg ni candidatos autodetectados
         strict_heuristic = False
 
@@ -3467,10 +3720,8 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
                 print_good(f"Candidatos de mensaje de error detectados ({len(candidates)}):")
                 for i, c in enumerate(candidates, 1):
                     print(f"  {Fore.YELLOW}{i}{Style.RESET_ALL}. {c}")
-                choice = input(
-                    f"{Fore.YELLOW}[?]{Style.RESET_ALL} Elige número [1-{len(candidates)}] "
-                    f"(Enter = #1, 'n' = ninguno / heurística estricta): "
-                ).strip().lower()
+                print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Elige número [1-{len(candidates)}] (Enter = #1, 'n' = ninguno / heurística estricta):")
+                choice = input("> ").strip().lower()
                 if choice == 'n':
                     strict_heuristic = True
                     print_warning("Sin mensaje de error: se aplicará heurística estricta (menos falsos positivos).")
@@ -3789,6 +4040,537 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
             "total_passwords": 0,
             "total_users": 0,
         }
+
+# ========== WORDPRESS / WPSCAN ==========
+def _append_finding_once(text):
+    if text and text not in FINDINGS:
+        FINDINGS.append(text)
+
+def _format_external_command(cmd):
+    masked_next = {"--api-token", "--cookie-string"}
+    out = []
+    hide = False
+    for part in cmd:
+        if hide:
+            out.append("***")
+            hide = False
+            continue
+        out.append(part)
+        if part in masked_next:
+            hide = True
+    return " ".join(f'"{p}"' if " " in str(p) else str(p) for p in out)
+
+def _stream_process_output(process):
+    output = []
+    if not process or not process.stdout:
+        return ""
+    for raw_line in iter(process.stdout.readline, b""):
+        if not raw_line:
+            break
+        line = raw_line.decode("utf-8", errors="replace")
+        output.append(line)
+        print(line, end="")
+    return "".join(output)
+
+def _load_json_file(path):
+    if not path or not os.path.isfile(path) or os.path.getsize(path) == 0:
+        return {}
+    with open(path, "rb") as f:
+        content = f.read().decode("utf-8", errors="ignore").strip()
+    if not content:
+        return {}
+    try:
+        return json.loads(content)
+    except Exception:
+        pass
+    for line in content.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            return json.loads(line)
+        except Exception:
+            continue
+    return {}
+
+def _session_cookie_string(session):
+    try:
+        pairs = []
+        for cookie in session.cookies:
+            if cookie.name and cookie.value:
+                pairs.append(f"{cookie.name}={cookie.value}")
+        return "; ".join(pairs)
+    except Exception:
+        return ""
+
+def _default_wordpress_password_wordlist():
+    if os.path.isfile(ROCKYOU_WORDLIST):
+        return ROCKYOU_WORDLIST
+    if os.path.isfile(SECLISTS_PASSWORDS):
+        return SECLISTS_PASSWORDS
+    if os.path.isfile(ROCKYOU_WORDLIST_GZ):
+        print_warning(f"rockyou existe comprimida en {ROCKYOU_WORDLIST_GZ}; descomprímela para usarla con WPScan.")
+    return None
+
+def _wpscan_component_version(component):
+    if not isinstance(component, dict):
+        return ""
+    version = component.get("version")
+    if isinstance(version, dict):
+        return str(version.get("number") or version.get("value") or version.get("version") or "")
+    if version is None:
+        return ""
+    return str(version)
+
+def _wpscan_component_confidence(component):
+    if not isinstance(component, dict):
+        return ""
+    version = component.get("version")
+    if isinstance(version, dict) and version.get("confidence") is not None:
+        return str(version.get("confidence"))
+    if component.get("confidence") is not None:
+        return str(component.get("confidence"))
+    return ""
+
+def _wpscan_reference_list(vuln):
+    refs = []
+    raw_refs = vuln.get("references") if isinstance(vuln, dict) else None
+    if isinstance(raw_refs, dict):
+        for key, value in raw_refs.items():
+            values = value if isinstance(value, list) else [value]
+            for item in values:
+                if item:
+                    refs.append(f"{key}:{item}")
+    elif isinstance(raw_refs, list):
+        refs.extend(str(r) for r in raw_refs if r)
+    return refs
+
+def _extract_wpscan_users(data):
+    users = []
+    raw = data.get("users") if isinstance(data, dict) else None
+
+    def add_user(username, info=None):
+        username = str(username or "").strip()
+        if not username:
+            return
+        info = info if isinstance(info, dict) else {}
+        users.append({
+            "username": username,
+            "id": info.get("id"),
+            "name": info.get("name") or info.get("display_name") or info.get("display_name_public"),
+            "found_by": info.get("found_by") or info.get("found_by_text") or "",
+        })
+
+    if isinstance(raw, dict):
+        for key, item in raw.items():
+            if isinstance(item, dict):
+                add_user(item.get("username") or item.get("login") or key, item)
+            else:
+                add_user(key)
+    elif isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict):
+                add_user(item.get("username") or item.get("login") or item.get("name"), item)
+            else:
+                add_user(item)
+
+    deduped = []
+    seen = set()
+    for user in users:
+        key = user["username"].lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(user)
+    return deduped
+
+def _normalize_wpscan_components(raw_components):
+    components = []
+    if isinstance(raw_components, dict):
+        iterable = raw_components.items()
+    elif isinstance(raw_components, list):
+        iterable = [(None, item) for item in raw_components]
+    else:
+        iterable = []
+    for slug, item in iterable:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("slug") or item.get("name") or slug or ""
+        components.append({
+            "name": str(name),
+            "location": item.get("location") or "",
+            "version": _wpscan_component_version(item),
+            "confidence": _wpscan_component_confidence(item),
+            "latest_version": item.get("latest_version") or "",
+            "last_updated": item.get("last_updated") or "",
+            "vulnerabilities_count": len(item.get("vulnerabilities") or []),
+        })
+    return components
+
+def _extract_wpscan_vulnerabilities(data):
+    vulnerabilities = []
+
+    def add_vulns(component_type, component_name, raw_vulns):
+        if not raw_vulns:
+            return
+        for vuln in raw_vulns:
+            if isinstance(vuln, dict):
+                title = vuln.get("title") or vuln.get("name") or vuln.get("id") or "Vulnerabilidad WPScan"
+                fixed_in = vuln.get("fixed_in")
+                if isinstance(fixed_in, list):
+                    fixed_in = ", ".join(str(x) for x in fixed_in)
+                vulnerabilities.append({
+                    "component_type": component_type,
+                    "component": component_name,
+                    "title": str(title),
+                    "fixed_in": str(fixed_in or ""),
+                    "references": _wpscan_reference_list(vuln),
+                })
+            else:
+                vulnerabilities.append({
+                    "component_type": component_type,
+                    "component": component_name,
+                    "title": str(vuln),
+                    "fixed_in": "",
+                    "references": [],
+                })
+
+    version = data.get("version") if isinstance(data, dict) else {}
+    if isinstance(version, dict):
+        core_name = "WordPress"
+        if version.get("number"):
+            core_name = f"WordPress {version.get('number')}"
+        add_vulns("core", core_name, version.get("vulnerabilities"))
+
+    main_theme = data.get("main_theme") if isinstance(data, dict) else {}
+    if isinstance(main_theme, dict):
+        add_vulns("theme", main_theme.get("slug") or main_theme.get("name") or "main_theme", main_theme.get("vulnerabilities"))
+
+    for collection_name, component_type in (("plugins", "plugin"), ("themes", "theme")):
+        raw_components = data.get(collection_name) if isinstance(data, dict) else {}
+        if isinstance(raw_components, dict):
+            for slug, item in raw_components.items():
+                if isinstance(item, dict):
+                    add_vulns(component_type, item.get("slug") or item.get("name") or slug, item.get("vulnerabilities"))
+
+    add_vulns("wordpress", "general", data.get("vulnerabilities") if isinstance(data, dict) else None)
+    return vulnerabilities
+
+def _normalize_wpscan_scan(data, target):
+    if not isinstance(data, dict):
+        data = {}
+    version_raw = data.get("version") if isinstance(data.get("version"), dict) else {}
+    plugins = _normalize_wpscan_components(data.get("plugins") or {})
+    themes = _normalize_wpscan_components(data.get("themes") or {})
+    main_theme_raw = data.get("main_theme") if isinstance(data.get("main_theme"), dict) else {}
+    main_theme = {}
+    if main_theme_raw:
+        main_theme = {
+            "name": main_theme_raw.get("slug") or main_theme_raw.get("name") or "",
+            "location": main_theme_raw.get("location") or "",
+            "version": _wpscan_component_version(main_theme_raw),
+            "confidence": _wpscan_component_confidence(main_theme_raw),
+            "latest_version": main_theme_raw.get("latest_version") or "",
+            "vulnerabilities_count": len(main_theme_raw.get("vulnerabilities") or []),
+        }
+    users = _extract_wpscan_users(data)
+    vulnerabilities = _extract_wpscan_vulnerabilities(data)
+    interesting = []
+    for item in data.get("interesting_findings") or []:
+        if isinstance(item, dict):
+            interesting.append({
+                "type": item.get("type") or "",
+                "url": item.get("url") or "",
+                "to_s": item.get("to_s") or item.get("interesting_entry") or item.get("type") or "",
+                "confidence": item.get("confidence"),
+            })
+        else:
+            interesting.append({"type": "", "url": "", "to_s": str(item), "confidence": None})
+
+    detected = bool(version_raw or plugins or themes or main_theme or users or interesting)
+    return {
+        "target": target,
+        "detected": detected,
+        "version": {
+            "number": version_raw.get("number") or "",
+            "status": version_raw.get("status") or "",
+            "found_by": version_raw.get("found_by") or "",
+        },
+        "main_theme": main_theme,
+        "plugins": plugins,
+        "themes": themes,
+        "users": users,
+        "interesting_findings": interesting,
+        "vulnerabilities": vulnerabilities,
+        "credentials": [],
+        "bruteforce": {},
+    }
+
+def _extract_wpscan_credentials(data, stdout_text=""):
+    credentials = set()
+
+    def add(user, pwd):
+        user = str(user or "").strip()
+        pwd = str(pwd or "").strip()
+        if user and pwd and len(user) <= 128 and len(pwd) <= 256:
+            credentials.add((user, pwd))
+
+    for match in re.finditer(r"\[SUCCESS\]\s*-\s*([^\s/]+)\s*/\s*([^\r\n]+)", stdout_text or "", re.I):
+        add(match.group(1), match.group(2))
+    for match in re.finditer(r"Username:\s*([^,\s]+)\s*,\s*Password:\s*(\S+)", stdout_text or "", re.I):
+        add(match.group(1), match.group(2))
+
+    def walk(obj):
+        if isinstance(obj, dict):
+            user = obj.get("username") or obj.get("login") or obj.get("user")
+            pwd = obj.get("password") or obj.get("pass")
+            if user and pwd:
+                add(user, pwd)
+            for value in obj.values():
+                walk(value)
+        elif isinstance(obj, list):
+            for item in obj:
+                walk(item)
+
+    walk(data)
+    return [{"username": u, "password": p, "source": "wpscan"} for u, p in sorted(credentials)]
+
+def _merge_credentials(global_key, credentials):
+    current = SCAN_DATA.get(global_key) or []
+    seen = set()
+    merged = []
+    for item in list(current) + list(credentials or []):
+        if not isinstance(item, dict):
+            continue
+        key = (item.get("username"), item.get("password"))
+        if not key[0] or not key[1] or key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+    SCAN_DATA[global_key] = merged
+    return merged
+
+def run_wpscan_enumeration(target, session, wpscan_path, api_token=None, threads=5):
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix="wpscan_enum_")
+    os.close(tmp_fd)
+    cmd = [
+        wpscan_path,
+        "--url", target,
+        "--enumerate",
+        "--format", "json",
+        "--output", tmp_path,
+        "--no-banner",
+        "-t", str(max(1, int(threads or 5))),
+    ]
+    if api_token:
+        cmd += ["--api-token", api_token]
+    cookie_string = _session_cookie_string(session)
+    if cookie_string:
+        cmd += ["--cookie-string", cookie_string]
+    if not VERIFY_TLS:
+        cmd += ["--disable-tls-checks"]
+
+    print_info(f"Ejecutando: {_format_external_command(cmd)}")
+    process = None
+    stdout_text = ""
+    rc = None
+    try:
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        stdout_text = _stream_process_output(process)
+        process.wait()
+        rc = process.returncode
+    except KeyboardInterrupt:
+        print_warning("WPScan interrumpido; esperando a que guarde resultados parciales...")
+        _wait_for_interrupted_child(process, "wpscan")
+        rc = process.returncode if process else None
+    finally:
+        data = _load_json_file(tmp_path)
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+    scan = _normalize_wpscan_scan(data, target)
+    scan["command"] = _format_external_command(cmd)
+    scan["return_code"] = rc
+    scan["stdout_tail"] = stdout_text[-4000:] if stdout_text else ""
+    if rc not in (0, None):
+        print_warning(f"WPScan terminó con código {rc}. Se guardará lo que haya podido parsearse.")
+    return scan
+
+def run_wpscan_bruteforce(target, session, wpscan_path, users, passlist, api_token=None,
+                          threads=20, attack_mode="xmlrpc"):
+    result = {
+        "attack_mode": attack_mode,
+        "users": list(users or []),
+        "password_wordlist": passlist,
+        "credentials": [],
+        "return_code": None,
+    }
+    if not users or not passlist or not os.path.isfile(passlist):
+        print_warning("No hay usuarios o wordlist válida para bruteforce WordPress.")
+        return result
+
+    user_fd, user_path = tempfile.mkstemp(suffix=".txt", prefix="wpscan_users_")
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix="wpscan_brute_")
+    os.close(user_fd)
+    os.close(tmp_fd)
+    with open(user_path, "w", encoding="utf-8") as f:
+        for user in users:
+            f.write(str(user).strip() + "\n")
+
+    cmd = [
+        wpscan_path,
+        "--url", target,
+        "--password-attack", attack_mode,
+        "-t", str(max(1, int(threads or 20))),
+        "-U", user_path,
+        "-P", passlist,
+        "--format", "json",
+        "--output", tmp_path,
+        "--no-banner",
+    ]
+    if api_token:
+        cmd += ["--api-token", api_token]
+    cookie_string = _session_cookie_string(session)
+    if cookie_string:
+        cmd += ["--cookie-string", cookie_string]
+    if not VERIFY_TLS:
+        cmd += ["--disable-tls-checks"]
+
+    print_info(f"Ejecutando: {_format_external_command(cmd)}")
+    process = None
+    stdout_text = ""
+    try:
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        stdout_text = _stream_process_output(process)
+        process.wait()
+        result["return_code"] = process.returncode
+    except KeyboardInterrupt:
+        print_warning("Bruteforce WPScan interrumpido; esperando a que guarde resultados parciales...")
+        _wait_for_interrupted_child(process, "wpscan")
+        result["return_code"] = process.returncode if process else None
+    finally:
+        data = _load_json_file(tmp_path)
+        result["credentials"] = _extract_wpscan_credentials(data, stdout_text)
+        result["command"] = _format_external_command(cmd)
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+        try:
+            os.unlink(user_path)
+        except Exception:
+            pass
+
+    if result["return_code"] not in (0, None):
+        print_warning(f"WPScan bruteforce terminó con código {result['return_code']}.")
+    if result["credentials"]:
+        rows = [[f"{Fore.MAGENTA}{c['username']}{Style.RESET_ALL}",
+                 f"{Fore.MAGENTA}{c['password']}{Style.RESET_ALL}"]
+                for c in result["credentials"]]
+        print_table(headers=["USUARIO", "CONTRASEÑA"], rows=rows, title="Credenciales WordPress válidas:")
+    else:
+        print_info("WPScan no reportó credenciales válidas.")
+    return result
+
+def run_wordpress_attacks(target, session):
+    print_phase("ENUMERACIÓN Y ATAQUES WORDPRESS")
+    wpscan_path = check_wpscan()
+    if not wpscan_path:
+        if not install_wpscan():
+            print_warning("Saltando WordPress/WPScan.")
+            return None
+        wpscan_path = check_wpscan()
+        if not wpscan_path:
+            print_warning("WPScan sigue sin estar disponible.")
+            return None
+
+    api_token = os.environ.get("WPSCAN_API_TOKEN") or os.environ.get("WPVULNDB_API_TOKEN") or ""
+    if api_token:
+        print_info("Usando token API de WPScan/WPVulnDB desde variable de entorno.")
+    else:
+        try:
+            print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Token API WPVulnDB/WPScan (opcional, Enter para omitir):")
+            api_token = getpass.getpass("> ").strip()
+        except (KeyboardInterrupt, EOFError):
+            api_token = ""
+
+    enum_threads = max(5, THREADS)
+    scan = run_wpscan_enumeration(target, session, wpscan_path, api_token=api_token, threads=enum_threads)
+    SCAN_DATA["wordpress"] = scan
+
+    version = scan.get("version") or {}
+    users = [u.get("username") for u in scan.get("users") or [] if u.get("username")]
+    vulnerabilities = scan.get("vulnerabilities") or []
+    plugins = scan.get("plugins") or []
+    main_theme = scan.get("main_theme") or {}
+
+    if not scan.get("detected"):
+        print_warning("WPScan no confirmó que el objetivo sea WordPress.")
+    else:
+        summary_rows = [
+            ["WordPress", version.get("number") or "detectado"],
+            ["Estado version", version.get("status") or "-"],
+            ["Tema principal", main_theme.get("name") or "-"],
+            ["Plugins detectados", str(len(plugins))],
+            ["Usuarios", str(len(users))],
+            ["Vulnerabilidades", str(len(vulnerabilities))],
+        ]
+        print_table(headers=["Campo", "Valor"], rows=summary_rows, title="Resumen WordPress:")
+
+    if version.get("number"):
+        _append_finding_once(f"[WP] WordPress {version.get('number')} ({version.get('status') or 'estado desconocido'})")
+    for user in users:
+        _append_finding_once(f"[WP:USER] {user}")
+    for vuln in vulnerabilities:
+        _append_finding_once(
+            f"[WP:VULN] {vuln.get('component_type')}:{vuln.get('component')} - {vuln.get('title')}"
+        )
+
+    if users:
+        SCAN_DATA["users"] = sorted(set((SCAN_DATA.get("users") or []) + users))
+        user_rows = [[u] for u in users]
+        print_table(headers=["Usuario"], rows=user_rows, title="Usuarios WordPress identificados:")
+
+        try:
+            print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Lanzar fuerza bruta con WPScan sobre estos usuarios? [S/n]:")
+            do_brute = input("> ").strip().lower() != 'n'
+        except (KeyboardInterrupt, EOFError):
+            do_brute = False
+        if do_brute:
+            passlist = input_path(
+                "Ruta a wordlist de contraseñas (Enter = rockyou/SecLists si existe): "
+            ).strip()
+            if not passlist:
+                passlist = _default_wordpress_password_wordlist()
+                if passlist:
+                    print_info(f"Usando wordlist por defecto: {passlist}")
+            if not passlist or not os.path.isfile(passlist):
+                print_warning("No hay wordlist de contraseñas válida. Saltando bruteforce WordPress.")
+            else:
+                try:
+                    print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Método de ataque [xmlrpc/wp-login] (default xmlrpc):")
+                    mode_in = input("> ").strip().lower()
+                except (KeyboardInterrupt, EOFError):
+                    mode_in = ""
+                attack_mode = mode_in if mode_in in ("xmlrpc", "wp-login") else "xmlrpc"
+                brute = run_wpscan_bruteforce(
+                    target, session, wpscan_path, users, passlist,
+                    api_token=api_token, threads=max(20, THREADS),
+                    attack_mode=attack_mode,
+                )
+                scan["bruteforce"] = brute
+                scan["credentials"] = brute.get("credentials", [])
+                if brute.get("credentials"):
+                    _merge_credentials("bruteforce_credentials", brute["credentials"])
+                    for cred in brute["credentials"]:
+                        _append_finding_once(f"[CRED:WP] {cred.get('username')}:{cred.get('password')}")
+    else:
+        print_info("WPScan no identificó usuarios; se omite la fuerza bruta automática.")
+
+    SCAN_DATA["wordpress"] = scan
+    return scan
 
 def spider_website(target, session, max_pages=500, max_depth=3, use_robots=True):
     print_info(f"Iniciando spidering en {target} (máx páginas: {max_pages}, profundidad: {max_depth})")
@@ -4270,6 +5052,7 @@ def _has_scan_data():
         bool(SCAN_DATA.get("users")),
         bool(SCAN_DATA.get("emails")),
         bool(SCAN_DATA.get("bruteforce_credentials")),
+        bool(SCAN_DATA.get("wordpress")),
         bool(SCAN_DATA.get("spider")),
         bool(SCAN_DATA.get("nuclei_findings")),
         bool((SCAN_DATA.get("source_code_analysis") or {}).get("findings")),
@@ -4302,11 +5085,12 @@ def show_menu():
     print(" 9. Pruebas de inyección (SQLi, XSS, Path Traversal, Command Injection)")
     print("10. Pruebas de API (descubrimiento, IDOR, mass assignment)")
     print("11. Enumeración de usuarios/emails y fuerza bruta de contraseñas")
-    print("12. PENTESTING COMPLETO (ejecuta todas las pruebas anteriores)")
+    print("12. Enumeración y ataques WordPress (WPScan)")
+    print("13. PENTESTING COMPLETO (ejecuta todas las pruebas anteriores)")
     if _has_scan_data():
-        print("13. Mostrar resumen en Markdown")
-        print("14. Mostrar tablas de resultados (formato visual)")
-    print("15. Salir")
+        print("14. Mostrar resumen en Markdown")
+        print("15. Mostrar tablas de resultados (formato visual)")
+    print("16. Salir")
     print("="*50)
 
 def run_information_gathering(target, session):
@@ -4341,30 +5125,26 @@ def run_vhost_fuzzing(target, session):
     # Si el target es una IP, hace falta dominio base manual; si es FQDN, sugerirlo
     is_ip = bool(re.match(r'^\d{1,3}(\.\d{1,3}){3}$', host))
     if is_ip:
-        base_domain = input(
-            f"{Fore.YELLOW}[?]{Style.RESET_ALL} Dominio base (ej: planning.htb) — obligatorio cuando el target es IP: "
-        ).strip()
+        print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Dominio base (ej: planning.htb) — obligatorio cuando el target es IP:")
+        base_domain = input("> ").strip()
     else:
         default = host
-        base_in = input(
-            f"{Fore.YELLOW}[?]{Style.RESET_ALL} Dominio base [{default}]: "
-        ).strip()
+        print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Dominio base [{default}]:")
+        base_in = input("> ").strip()
         base_domain = base_in or default
     if not base_domain:
         print_error("Dominio base requerido. Saltando vhost fuzzing.")
         return
-    use_default = input(
-        f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Usar wordlist por defecto (SecLists DNS/namelist.txt)? [S/n]: "
-    ).strip().lower()
+    print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Usar wordlist por defecto (SecLists DNS/namelist.txt)? [S/n]:")
+    use_default = input("> ").strip().lower()
     wordlist = None
     if use_default == 'n':
         custom_wl = input_path("Ruta a wordlist personalizada: ").strip()
         if custom_wl:
             wordlist = custom_wl
     if check_ffuf():
-        use_ffuf = input(
-            f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Usar ffuf? (recomendado) [S/n]: "
-        ).strip().lower() != 'n'
+        print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Usar ffuf? (recomendado) [S/n]:")
+        use_ffuf = input("> ").strip().lower() != 'n'
     else:
         use_ffuf = False
         print_warning("ffuf no está instalado. Usando método interno.")
@@ -4372,33 +5152,36 @@ def run_vhost_fuzzing(target, session):
     # local), así que conviene un default alto. El usuario puede bajarlo si
     # el target tiene WAF/rate-limiting.
     default_threads = max(THREADS, 50)
-    t_in = input(
-        f"{Fore.YELLOW}[?]{Style.RESET_ALL} Threads [{default_threads}]: "
-    ).strip()
+    print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Threads [{default_threads}]:")
+    t_in = input("> ").strip()
     try:
         vhost_threads = int(t_in) if t_in else default_threads
         if vhost_threads < 1:
             vhost_threads = default_threads
     except ValueError:
         vhost_threads = default_threads
-    timeout_in = input(
-        f"{Fore.YELLOW}[?]{Style.RESET_ALL} Timeout por request en segundos [5]: "
-    ).strip()
+    print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Timeout por request en segundos [5]:")
+    timeout_in = input("> ").strip()
     try:
         req_timeout = int(timeout_in) if timeout_in else 5
         if req_timeout < 1:
             req_timeout = 5
     except ValueError:
         req_timeout = 5
+    print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Añadir filtro por File Size detectado (-fs en ffuf)? [S/n]:")
+    use_fs = input("> ").strip().lower()
+    use_fs_bool = (use_fs != 'n')
+
     hits = vhost_bruteforce(target, session, base_domain,
                             wordlist=wordlist, threads=vhost_threads,
                             request_timeout=req_timeout,
-                            use_ffuf=use_ffuf) or []
+                            use_ffuf=use_ffuf, use_fs_filter=use_fs_bool) or []
     SCAN_DATA["vhosts"] = hits
 
 def run_directory_fuzzing(target, session):
     print_phase("FUZZING DE DIRECTORIOS")
-    use_default = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Usar wordlist por defecto (raft-small-directories)? [S/n]: ").strip().lower()
+    print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Usar wordlist por defecto (raft-small-directories)? [S/n]:")
+    use_default = input("> ").strip().lower()
     wordlist = None
     if use_default == 'n':
         custom_wl = input_path("Ruta a wordlist personalizada: ").strip()
@@ -4407,7 +5190,8 @@ def run_directory_fuzzing(target, session):
         else:
             print_warning("No se proporcionó wordlist. Usando lista interna.")
     if check_ffuf():
-        use_ffuf = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Usar ffuf para fuzzing? (recomendado) [S/n]: ").strip().lower() != 'n'
+        print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Usar ffuf para fuzzing? (recomendado) [S/n]:")
+        use_ffuf = input("> ").strip().lower() != 'n'
     else:
         use_ffuf = False
         print_warning("ffuf no está instalado. Usando método interno.")
@@ -4507,11 +5291,13 @@ def run_user_enum_bruteforce(target, session):
     if emails:
         print_good(f"Emails encontrados: {', '.join(emails)}")
     safe_execute(test_user_enumeration_form, target, session)
-    want_brute = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Desea realizar fuerza bruta de contraseñas? (s/n): ").strip().lower()
+    print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Desea realizar fuerza bruta de contraseñas? (s/n):")
+    want_brute = input("> ").strip().lower()
     if want_brute in ('', 's'):
         passlist = input_path("Ruta a wordlist de contraseñas (dejar vacío para usar por defecto de SecLists): ").strip()
         if not users:
-            users_input = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Introduce usuarios separados por comas: ").strip()
+            print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Introduce usuarios separados por comas:")
+            users_input = input("> ").strip()
             if users_input:
                 users = [u.strip() for u in users_input.split(',') if u.strip()]
             else:
@@ -4522,17 +5308,20 @@ def run_user_enum_bruteforce(target, session):
 
 def run_spider(target, session):
     print_phase("SPIDERING / MAPEO COMPLETO DEL SITIO")
-    max_pages = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Máximo número de páginas a rastrear (default 500): ").strip()
+    print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Máximo número de páginas a rastrear (default 500):")
+    max_pages = input("> ").strip()
     if not max_pages:
         max_pages = 500
     else:
         max_pages = int(max_pages)
-    max_depth = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Profundidad máxima de rastreo (default 3): ").strip()
+    print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Profundidad máxima de rastreo (default 3):")
+    max_depth = input("> ").strip()
     if not max_depth:
         max_depth = 3
     else:
         max_depth = int(max_depth)
-    use_robots = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Respetar robots.txt? [S/n]: ").strip().lower() != 'n'
+    print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Respetar robots.txt? [S/n]:")
+    use_robots = input("> ").strip().lower() != 'n'
     urls, params, forms = spider_website(target, session, max_pages=max_pages, max_depth=max_depth, use_robots=use_robots)
     SCAN_DATA["spider"] = {
         "total_urls": len(urls),
@@ -4645,6 +5434,7 @@ def print_final_summary(target):
     users = SCAN_DATA.get("users") or []
     emails = SCAN_DATA.get("emails") or []
     creds = SCAN_DATA.get("bruteforce_credentials") or []
+    wordpress = SCAN_DATA.get("wordpress") or {}
     robots_paths = SCAN_DATA.get("robots_paths") or []
     http_methods = SCAN_DATA.get("http_methods") or []
     src_code = SCAN_DATA.get("source_code_analysis") or {}
@@ -4668,6 +5458,7 @@ def print_final_summary(target):
         ["Usuarios", str(len(users))],
         ["Emails", str(len(emails))],
         ["Credenciales válidas", str(len(creds))],
+        ["WordPress vulnerabilidades", str(len(wordpress.get("vulnerabilities") or []))],
         ["Hallazgos en código fuente", str(len(src_findings))],
     ]
     print_table(
@@ -4838,6 +5629,43 @@ def print_final_summary(target):
             title=f"Directorios encontrados {_count_label(len(dir_hits), len(dir_rows))}:",
         )
 
+    # 6c. WordPress / WPScan
+    if wordpress:
+        wp_version = wordpress.get("version") or {}
+        wp_theme = wordpress.get("main_theme") or {}
+        wp_users = wordpress.get("users") or []
+        wp_vulns = wordpress.get("vulnerabilities") or []
+        wp_rows = [
+            ["Detectado", "Si" if wordpress.get("detected") else "No confirmado"],
+            ["Version", wp_version.get("number") or "-"],
+            ["Estado", wp_version.get("status") or "-"],
+            ["Tema principal", wp_theme.get("name") or "-"],
+            ["Usuarios", str(len(wp_users))],
+            ["Vulnerabilidades", str(len(wp_vulns))],
+            ["Credenciales", str(len(wordpress.get("credentials") or []))],
+        ]
+        print_table(
+            headers=["Campo", "Valor"],
+            rows=wp_rows,
+            alignments=['<', '<'],
+            title="WordPress / WPScan:",
+        )
+        if wp_vulns:
+            vuln_rows = []
+            for v in wp_vulns[:30]:
+                vuln_rows.append([
+                    _trim(v.get("component_type", "-"), 14),
+                    _trim(v.get("component", "-"), 30),
+                    _trim(v.get("title", "-"), 70),
+                    _trim(v.get("fixed_in", "-"), 20),
+                ])
+            print_table(
+                headers=["Tipo", "Componente", "Titulo", "Fixed in"],
+                rows=vuln_rows,
+                alignments=['<', '<', '<', '<'],
+                title=f"Vulnerabilidades WordPress {_count_label(len(wp_vulns), len(vuln_rows))}:",
+            )
+
     # 7. API endpoints
     if api_endpoints:
         api_rows = []
@@ -4959,8 +5787,8 @@ def print_final_summary(target):
                 msg = m.group(2)
             else:
                 cat, msg = "OTROS", f
-            color = Fore.RED if cat.startswith(("VULN", "NUCLEI:CRITICAL", "NUCLEI:HIGH", "CRED")) else (
-                Fore.YELLOW if cat.startswith(("NUCLEI:MEDIUM", "DIR", "VHOST")) else Fore.CYAN
+            color = Fore.RED if cat.startswith(("VULN", "NUCLEI:CRITICAL", "NUCLEI:HIGH", "CRED", "WP:VULN")) else (
+                Fore.YELLOW if cat.startswith(("NUCLEI:MEDIUM", "DIR", "VHOST", "WP")) else Fore.CYAN
             )
             find_rows.append([f"{color}{cat}{Style.RESET_ALL}", _trim(msg, 110)])
         print_table(
@@ -4992,6 +5820,7 @@ def run_full_pentest(target, session):
     run_injection_tests(target, session)               # 9
     run_api_tests(target, session)                     # 10
     run_user_enum_bruteforce(target, session)          # 11
+    run_wordpress_attacks(target, session)             # 12
     print_good("Pentesting completo finalizado.")
     print_final_summary(target)
 
@@ -5115,8 +5944,10 @@ def main():
             elif option == '11':
                 run_user_enum_bruteforce(TARGET_URL, session)
             elif option == '12':
-                run_full_pentest(TARGET_URL, session)
+                run_wordpress_attacks(TARGET_URL, session)
             elif option == '13':
+                run_full_pentest(TARGET_URL, session)
+            elif option == '14':
                 if not _has_scan_data():
                     print_warning("Aún no hay datos. Ejecuta primero algún módulo o el pentesting completo.")
                 else:
@@ -5135,12 +5966,12 @@ def main():
                     print(md)
                     print("=" * 70)
                     print_good("Fin del markdown. Copia el bloque anterior.")
-            elif option == '14':
+            elif option == '15':
                 if not _has_scan_data():
                     print_warning("Aún no hay datos. Ejecuta primero algún módulo o el pentesting completo.")
                 else:
                     print_final_summary(TARGET_URL)
-            elif option == '15':
+            elif option == '16':
                 _exit_gracefully()
             else:
                 print_error("Opción no válida. Intenta de nuevo.")
