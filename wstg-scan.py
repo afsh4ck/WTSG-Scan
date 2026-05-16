@@ -934,6 +934,28 @@ def print_phase(title):
 
 # Regex para descontar códigos ANSI al medir ancho visible
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
+_BOX_DRAWING_FALLBACK = str.maketrans({
+    chr(0x2500): "-",
+    chr(0x2502): "|",
+    chr(0x250c): "+",
+    chr(0x2510): "+",
+    chr(0x2514): "+",
+    chr(0x2518): "+",
+    chr(0x251c): "+",
+    chr(0x2524): "+",
+    chr(0x252c): "+",
+    chr(0x2534): "+",
+    chr(0x253c): "+",
+})
+
+def _safe_print_line(text=""):
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        encoding = sys.stdout.encoding or "utf-8"
+        fallback = str(text).translate(_BOX_DRAWING_FALLBACK)
+        fallback = fallback.encode(encoding, errors="replace").decode(encoding, errors="replace")
+        sys.stdout.write(fallback + os.linesep)
 
 def _visible_len(s):
     return len(_ANSI_RE.sub('', str(s)))
@@ -977,21 +999,21 @@ def print_table(headers, rows, alignments=None, title=None, border_color=None, f
     mid = "├" + "┼".join("─" * (w + 2) for w in widths) + "┤"
     bot = "└" + "┴".join("─" * (w + 2) for w in widths) + "┘"
     if title:
-        print(f"\n{color}{title}{rc}")
-    print(f"{color}{top}{rc}")
+        _safe_print_line(f"\n{color}{title}{rc}")
+    _safe_print_line(f"{color}{top}{rc}")
     header_line = " │ ".join(_pad_cell(h, widths[i], alignments[i]) for i, h in enumerate(headers))
-    print(f"{color}│{rc} {color}{header_line}{rc} {color}│{rc}")
-    print(f"{color}{mid}{rc}")
+    _safe_print_line(f"{color}│{rc} {color}{header_line}{rc} {color}│{rc}")
+    _safe_print_line(f"{color}{mid}{rc}")
     for r in rows:
         cells = [
             _pad_cell(r[i] if i < len(r) else '', widths[i], alignments[i])
             for i in range(n_cols)
         ]
         line = f" {color}│{rc} ".join(cells)
-        print(f"{color}│{rc} {line} {color}│{rc}")
-    print(f"{color}{bot}{rc}")
+        _safe_print_line(f"{color}│{rc} {line} {color}│{rc}")
+    _safe_print_line(f"{color}{bot}{rc}")
     if footer:
-        print(footer)
+        _safe_print_line(footer)
 
 def _safe_filename_from_url(target_url):
     """Genera un nombre de archivo estable en base a la URL objetivo."""
@@ -4072,6 +4094,101 @@ def _stream_process_output(process):
         print(line, end="")
     return "".join(output)
 
+def _write_process_bytes(data):
+    if not data:
+        return
+    try:
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
+    except Exception:
+        sys.stdout.write(data.decode("utf-8", errors="replace"))
+        sys.stdout.flush()
+
+def _decode_process_output(chunks):
+    if not chunks:
+        return ""
+    return b"".join(chunks).decode("utf-8", errors="replace")
+
+def _stream_command_output(cmd, capture=True, prefer_pty=True, interrupt_label="proceso"):
+    """Run a command while printing its raw output.
+
+    On POSIX, a PTY is used when possible so CLI tools keep their native colour
+    decisions. The pipe fallback still preserves any ANSI sequences emitted.
+    """
+    chunks = []
+    process = None
+    master_fd = None
+    slave_fd = None
+
+    if prefer_pty and os.name != "nt":
+        try:
+            import pty
+            master_fd, slave_fd = pty.openpty()
+            process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                close_fds=True,
+            )
+            os.close(slave_fd)
+            slave_fd = None
+            while True:
+                try:
+                    data = os.read(master_fd, 4096)
+                except OSError:
+                    break
+                if not data:
+                    break
+                if capture:
+                    chunks.append(data)
+                _write_process_bytes(data)
+            process.wait()
+            return process.returncode, _decode_process_output(chunks)
+        except KeyboardInterrupt:
+            print_warning(f"{interrupt_label} interrumpido; esperando a que finalice...")
+            _wait_for_interrupted_child(process, interrupt_label)
+            return process.returncode if process else None, _decode_process_output(chunks)
+        except Exception as e:
+            print_warning(f"No se pudo usar PTY para {interrupt_label} ({type(e).__name__}); usando pipe.")
+        finally:
+            for fd in (slave_fd, master_fd):
+                if fd is not None:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+
+    try:
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        while process.stdout:
+            try:
+                data = os.read(process.stdout.fileno(), 4096)
+            except OSError:
+                break
+            if not data:
+                break
+            if capture:
+                chunks.append(data)
+            _write_process_bytes(data)
+        process.wait()
+        return process.returncode, _decode_process_output(chunks)
+    except KeyboardInterrupt:
+        print_warning(f"{interrupt_label} interrumpido; esperando a que finalice...")
+        _wait_for_interrupted_child(process, interrupt_label)
+        return process.returncode if process else None, _decode_process_output(chunks)
+
+def _capture_command_output(cmd, interrupt_label="proceso"):
+    process = None
+    try:
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        stdout, _ = process.communicate()
+        return process.returncode, (stdout or b"").decode("utf-8", errors="replace")
+    except KeyboardInterrupt:
+        print_warning(f"{interrupt_label} interrumpido; esperando a que finalice...")
+        _wait_for_interrupted_child(process, interrupt_label)
+        return process.returncode if process else None, ""
+
 def _load_json_file(path):
     if not path or not os.path.isfile(path) or os.path.getsize(path) == 0:
         return {}
@@ -4201,6 +4318,7 @@ def _normalize_wpscan_components(raw_components):
             "location": item.get("location") or "",
             "version": _wpscan_component_version(item),
             "confidence": _wpscan_component_confidence(item),
+            "found_by": item.get("found_by") or item.get("found_by_text") or "",
             "latest_version": item.get("latest_version") or "",
             "last_updated": item.get("last_updated") or "",
             "vulnerabilities_count": len(item.get("vulnerabilities") or []),
@@ -4270,7 +4388,9 @@ def _normalize_wpscan_scan(data, target):
             "location": main_theme_raw.get("location") or "",
             "version": _wpscan_component_version(main_theme_raw),
             "confidence": _wpscan_component_confidence(main_theme_raw),
+            "found_by": main_theme_raw.get("found_by") or main_theme_raw.get("found_by_text") or "",
             "latest_version": main_theme_raw.get("latest_version") or "",
+            "last_updated": main_theme_raw.get("last_updated") or "",
             "vulnerabilities_count": len(main_theme_raw.get("vulnerabilities") or []),
         }
     users = _extract_wpscan_users(data)
@@ -4308,6 +4428,7 @@ def _normalize_wpscan_scan(data, target):
 
 def _extract_wpscan_credentials(data, stdout_text=""):
     credentials = set()
+    stdout_text = _ANSI_RE.sub("", stdout_text or "")
 
     def add(user, pwd):
         user = str(user or "").strip()
@@ -4350,80 +4471,102 @@ def _merge_credentials(global_key, credentials):
     SCAN_DATA[global_key] = merged
     return merged
 
-def run_wpscan_enumeration(target, session, wpscan_path, api_token=None, threads=5, request_timeout=15):
-    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix="wpscan_enum_")
-    os.close(tmp_fd)
-    # Usar enumerate explícito para evitar ambigüedades con versiones de WPScan
-    enum_flags = "u,ap,at"
-    cmd = [
-        wpscan_path,
-        "--url", target,
-        "--enumerate", enum_flags,
-        "--request-timeout", str(max(5, int(request_timeout or 15))),
-        "--format", "json",
-        "--output", tmp_path,
-        "--no-banner",
-        "-t", str(max(1, int(threads or 5))),
-    ]
+def _append_wpscan_common_options(cmd, session, api_token=None):
     if api_token:
         cmd += ["--api-token", api_token]
     cookie_string = _session_cookie_string(session)
     if cookie_string:
         cmd += ["--cookie-string", cookie_string]
-    if not VERIFY_TLS:
+    if not VERIFY_TLS and "--disable-tls-checks" not in cmd:
         cmd += ["--disable-tls-checks"]
+    return cmd
 
-    def _run_cmd(cmd_list):
-        print_info(f"Ejecutando: {_format_external_command(cmd_list)}")
-        proc = subprocess.Popen(cmd_list, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        out = _stream_process_output(proc)
-        proc.wait()
-        return proc.returncode, out
+def _wpscan_retry_command(cmd, request_timeout=None):
+    retry_cmd = list(cmd)
+    for flag in ("--disable-tls-checks", "--random-user-agent", "--follow-redirection"):
+        if flag not in retry_cmd:
+            retry_cmd.append(flag)
+    if request_timeout is not None:
+        if "--request-timeout" in retry_cmd:
+            idx = retry_cmd.index("--request-timeout")
+            if idx + 1 < len(retry_cmd):
+                retry_cmd[idx + 1] = str(max(30, int(request_timeout or 15)))
+        else:
+            retry_cmd += ["--request-timeout", str(max(30, int(request_timeout or 15)))]
+    return retry_cmd
 
-    process = None
-    stdout_text = ""
-    rc = None
+def _run_wpscan_visible(cmd, request_timeout=None, label="WPScan"):
+    print_info(f"Ejecutando {label} con salida nativa: {_format_external_command(cmd)}")
+    rc, stdout_text = _stream_command_output(cmd, capture=True, prefer_pty=True, interrupt_label="wpscan")
+    if rc == 4:
+        print_warning("WPScan retorno codigo 4; reintentando con opciones mas tolerantes.")
+        retry_cmd = _wpscan_retry_command(cmd, request_timeout=request_timeout)
+        print_info(f"Reintentando {label}: {_format_external_command(retry_cmd)}")
+        rc2, out2 = _stream_command_output(retry_cmd, capture=True, prefer_pty=True, interrupt_label="wpscan")
+        if out2:
+            stdout_text = out2
+        rc = rc2
+    return rc, stdout_text
+
+def _run_wpscan_json(cmd, request_timeout=None):
+    print_info("Generando JSON de WPScan para construir el resumen final...")
+    rc, stdout_text = _capture_command_output(cmd, interrupt_label="wpscan")
+    if rc == 4:
+        print_warning("WPScan retorno codigo 4 al generar JSON; reintentando con opciones mas tolerantes.")
+        retry_cmd = _wpscan_retry_command(cmd, request_timeout=request_timeout)
+        rc2, out2 = _capture_command_output(retry_cmd, interrupt_label="wpscan")
+        if out2:
+            stdout_text = out2
+        rc = rc2
+    return rc, stdout_text
+
+def run_wpscan_enumeration(target, session, wpscan_path, api_token=None, threads=5, request_timeout=15):
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix="wpscan_enum_")
+    os.close(tmp_fd)
+    # Usar enumerate explicito para evitar ambiguedades con versiones de WPScan
+    enum_flags = "u,ap,at"
+    base_cmd = [
+        wpscan_path,
+        "--url", target,
+        "--enumerate", enum_flags,
+        "--request-timeout", str(max(5, int(request_timeout or 15))),
+        "-t", str(max(1, int(threads or 5))),
+    ]
+
+    visible_cmd = _append_wpscan_common_options(list(base_cmd) + ["--format", "cli"], session, api_token=api_token)
+    json_cmd = _append_wpscan_common_options(
+        list(base_cmd) + ["--format", "json", "--output", tmp_path, "--no-banner"],
+        session,
+        api_token=api_token,
+    )
+
+    display_rc, stdout_text = _run_wpscan_visible(
+        visible_cmd,
+        request_timeout=request_timeout,
+        label="WPScan enumeracion",
+    )
+
+    json_rc = None
+    json_stdout = ""
+    if display_rc is not None:
+        json_rc, json_stdout = _run_wpscan_json(json_cmd, request_timeout=request_timeout)
+
+    data = _load_json_file(tmp_path)
     try:
-        rc, stdout_text = _run_cmd(cmd)
-        # Si WPScan falla con código 4 (fallo de detección / TLS / red), intentar reintento con flags más laxos
-        if rc == 4:
-            print_warning("WPScan retornó código 4 — reintentando con opciones más tolerantes (follow-redirects, random UA, disable tls checks)...")
-            retry_cmd = list(cmd)
-            if "--disable-tls-checks" not in retry_cmd:
-                retry_cmd += ["--disable-tls-checks"]
-            if "--random-user-agent" not in retry_cmd:
-                retry_cmd += ["--random-user-agent"]
-            if "--follow-redirection" not in retry_cmd:
-                retry_cmd += ["--follow-redirection"]
-            # aumentar timeout para el retry
-            # reemplazar request-timeout si existe
-            if "--request-timeout" in retry_cmd:
-                idx = retry_cmd.index("--request-timeout")
-                retry_cmd[idx+1] = str(max(30, int(request_timeout or 15)))
-            else:
-                retry_cmd += ["--request-timeout", str(max(30, int(request_timeout or 15)))]
-            rc2, out2 = _run_cmd(retry_cmd)
-            # preferir la salida del retry si produjo algo
-            if out2:
-                stdout_text = out2
-            rc = rc2
-    except KeyboardInterrupt:
-        print_warning("WPScan interrumpido; esperando a que guarde resultados parciales...")
-        _wait_for_interrupted_child(process, "wpscan")
-        rc = process.returncode if process else None
-    finally:
-        data = _load_json_file(tmp_path)
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
+        os.unlink(tmp_path)
+    except Exception:
+        pass
 
     scan = _normalize_wpscan_scan(data, target)
-    scan["command"] = _format_external_command(cmd)
-    scan["return_code"] = rc
+    scan["command"] = _format_external_command(visible_cmd)
+    scan["json_command"] = _format_external_command(json_cmd)
+    scan["return_code"] = json_rc if json_rc is not None else display_rc
+    scan["display_return_code"] = display_rc
+    scan["json_return_code"] = json_rc
     scan["stdout_tail"] = stdout_text[-4000:] if stdout_text else ""
-    if rc not in (0, None):
-        print_warning(f"WPScan terminó con código {rc}. Se guardará lo que haya podido parsearse.")
+    scan["json_stdout_tail"] = json_stdout[-4000:] if json_stdout else ""
+    if scan["return_code"] not in (0, None):
+        print_warning(f"WPScan termino con codigo {scan['return_code']}. Se guardara lo que haya podido parsearse.")
     return scan
 
 def run_wpscan_bruteforce(target, session, wpscan_path, users, passlist, api_token=None,
@@ -4440,9 +4583,7 @@ def run_wpscan_bruteforce(target, session, wpscan_path, users, passlist, api_tok
         return result
 
     user_fd, user_path = tempfile.mkstemp(suffix=".txt", prefix="wpscan_users_")
-    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix="wpscan_brute_")
     os.close(user_fd)
-    os.close(tmp_fd)
     with open(user_path, "w", encoding="utf-8") as f:
         for user in users:
             f.write(str(user).strip() + "\n")
@@ -4454,38 +4595,18 @@ def run_wpscan_bruteforce(target, session, wpscan_path, users, passlist, api_tok
         "-t", str(max(1, int(threads or 20))),
         "-U", user_path,
         "-P", passlist,
-        "--format", "json",
-        "--output", tmp_path,
-        "--no-banner",
+        "--format", "cli",
     ]
-    if api_token:
-        cmd += ["--api-token", api_token]
-    cookie_string = _session_cookie_string(session)
-    if cookie_string:
-        cmd += ["--cookie-string", cookie_string]
-    if not VERIFY_TLS:
-        cmd += ["--disable-tls-checks"]
+    cmd = _append_wpscan_common_options(cmd, session, api_token=api_token)
 
-    print_info(f"Ejecutando: {_format_external_command(cmd)}")
-    process = None
     stdout_text = ""
     try:
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        stdout_text = _stream_process_output(process)
-        process.wait()
-        result["return_code"] = process.returncode
-    except KeyboardInterrupt:
-        print_warning("Bruteforce WPScan interrumpido; esperando a que guarde resultados parciales...")
-        _wait_for_interrupted_child(process, "wpscan")
-        result["return_code"] = process.returncode if process else None
-    finally:
-        data = _load_json_file(tmp_path)
-        result["credentials"] = _extract_wpscan_credentials(data, stdout_text)
+        rc, stdout_text = _run_wpscan_visible(cmd, label="WPScan bruteforce")
+        result["return_code"] = rc
+        result["credentials"] = _extract_wpscan_credentials({}, stdout_text)
         result["command"] = _format_external_command(cmd)
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
+        result["stdout_tail"] = stdout_text[-4000:] if stdout_text else ""
+    finally:
         try:
             os.unlink(user_path)
         except Exception:
@@ -4501,6 +4622,169 @@ def run_wpscan_bruteforce(target, session, wpscan_path, users, passlist, api_tok
     else:
         print_info("WPScan no reportó credenciales válidas.")
     return result
+
+def _wp_summary_value(value, width=90):
+    if value is None or value == "":
+        return "-"
+    text = re.sub(r"\s+", " ", str(value)).strip()
+    return text if len(text) <= width else text[: max(0, width - 3)] + "..."
+
+def _wp_component_rows(components):
+    rows = []
+    for item in components or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            vuln_count = int(item.get("vulnerabilities_count") or 0)
+        except Exception:
+            vuln_count = 0
+        vuln_text = f"{Fore.RED}{vuln_count}{Style.RESET_ALL}" if vuln_count else "0"
+        rows.append([
+            _wp_summary_value(item.get("name"), 34),
+            _wp_summary_value(item.get("version"), 18),
+            _wp_summary_value(item.get("latest_version"), 18),
+            _wp_summary_value(item.get("confidence"), 8),
+            vuln_text,
+            _wp_summary_value(item.get("location"), 72),
+        ])
+    return rows
+
+def print_wpscan_detailed_summary(scan):
+    scan = scan or {}
+    version = scan.get("version") or {}
+    main_theme = scan.get("main_theme") or {}
+    plugins = scan.get("plugins") or []
+    themes = list(scan.get("themes") or [])
+    users = scan.get("users") or []
+    vulnerabilities = scan.get("vulnerabilities") or []
+    credentials = scan.get("credentials") or []
+    interesting = scan.get("interesting_findings") or []
+
+    print_phase("RESUMEN WORDPRESS / WPSCAN")
+    core_rows = [
+        ["Target", _wp_summary_value(scan.get("target"), 90)],
+        ["Detectado", "Si" if scan.get("detected") else "No confirmado"],
+        ["Version WordPress", _wp_summary_value(version.get("number"))],
+        ["Estado version", _wp_summary_value(version.get("status"))],
+        ["Version encontrada por", _wp_summary_value(version.get("found_by"), 90)],
+        ["Tema principal", _wp_summary_value(main_theme.get("name"))],
+        ["Plugins encontrados", str(len(plugins))],
+        ["Temas encontrados", str(len(themes) + (1 if main_theme else 0))],
+        ["Usuarios encontrados", str(len(users))],
+        ["Vulnerabilidades", str(len(vulnerabilities))],
+        ["Credenciales validas", str(len(credentials))],
+    ]
+    print_table(headers=["Campo", "Valor"], rows=core_rows, title="Resumen general WordPress:")
+
+    if plugins:
+        print_table(
+            headers=["Plugin", "Version", "Ultima", "Conf.", "Vulns", "Ubicacion"],
+            rows=_wp_component_rows(plugins),
+            alignments=['<', '<', '<', '>', '>', '<'],
+            title=f"Plugins WordPress encontrados ({len(plugins)}):",
+        )
+    else:
+        print_info("WPScan no reporto plugins.")
+
+    theme_items = []
+    seen_themes = set()
+    if main_theme:
+        item = dict(main_theme)
+        item["name"] = f"{item.get('name') or '-'} (principal)"
+        theme_items.append(item)
+        seen_themes.add((str(main_theme.get("name") or "").lower(), str(main_theme.get("location") or "").lower()))
+    for theme in themes:
+        if not isinstance(theme, dict):
+            continue
+        key = (str(theme.get("name") or "").lower(), str(theme.get("location") or "").lower())
+        if key in seen_themes:
+            continue
+        seen_themes.add(key)
+        theme_items.append(theme)
+    if theme_items:
+        print_table(
+            headers=["Tema", "Version", "Ultima", "Conf.", "Vulns", "Ubicacion"],
+            rows=_wp_component_rows(theme_items),
+            alignments=['<', '<', '<', '>', '>', '<'],
+            title=f"Temas WordPress encontrados ({len(theme_items)}):",
+        )
+    else:
+        print_info("WPScan no reporto temas.")
+
+    if users:
+        user_rows = [
+            [
+                _wp_summary_value(u.get("username"), 32),
+                _wp_summary_value(u.get("id"), 8),
+                _wp_summary_value(u.get("name"), 34),
+                _wp_summary_value(u.get("found_by"), 72),
+            ]
+            for u in users if isinstance(u, dict)
+        ]
+        print_table(
+            headers=["Usuario", "ID", "Nombre", "Encontrado por"],
+            rows=user_rows,
+            alignments=['<', '<', '<', '<'],
+            title=f"Usuarios WordPress encontrados ({len(user_rows)}):",
+        )
+    else:
+        print_info("WPScan no reporto usuarios.")
+
+    if interesting:
+        interesting_rows = [
+            [
+                _wp_summary_value(i.get("type"), 24),
+                _wp_summary_value(i.get("to_s"), 84),
+                _wp_summary_value(i.get("url"), 84),
+                _wp_summary_value(i.get("confidence"), 8),
+            ]
+            for i in interesting if isinstance(i, dict)
+        ]
+        print_table(
+            headers=["Tipo", "Detalle", "URL", "Conf."],
+            rows=interesting_rows,
+            alignments=['<', '<', '<', '>'],
+            title=f"Hallazgos interesantes WordPress ({len(interesting_rows)}):",
+        )
+
+    if vulnerabilities:
+        vuln_rows = []
+        for vuln in vulnerabilities:
+            if not isinstance(vuln, dict):
+                continue
+            refs = ", ".join(vuln.get("references") or [])
+            vuln_rows.append([
+                _wp_summary_value(vuln.get("component_type"), 14),
+                _wp_summary_value(vuln.get("component"), 30),
+                _wp_summary_value(vuln.get("title"), 80),
+                _wp_summary_value(vuln.get("fixed_in"), 18),
+                _wp_summary_value(refs, 70),
+            ])
+        print_table(
+            headers=["Tipo", "Componente", "Titulo", "Fixed in", "Referencias"],
+            rows=vuln_rows,
+            alignments=['<', '<', '<', '<', '<'],
+            title=f"Vulnerabilidades WordPress ({len(vuln_rows)}):",
+        )
+    else:
+        print_info("WPScan no reporto vulnerabilidades.")
+
+    if credentials:
+        cred_rows = [
+            [
+                f"{Fore.MAGENTA}{_wp_summary_value(c.get('username'), 32)}{Style.RESET_ALL}",
+                f"{Fore.MAGENTA}{_wp_summary_value(c.get('password'), 40)}{Style.RESET_ALL}",
+                _wp_summary_value(c.get("source") or "wpscan", 16),
+            ]
+            for c in credentials if isinstance(c, dict)
+        ]
+        print_table(
+            headers=["Usuario", "Password", "Fuente"],
+            rows=cred_rows,
+            alignments=['<', '<', '<'],
+            title=f"Credenciales WordPress validas ({len(cred_rows)}):",
+            border_color=Fore.GREEN,
+        )
 
 def run_wordpress_attacks(target, session):
     print_phase("ENUMERACIÓN Y ATAQUES WORDPRESS")
@@ -4549,6 +4833,14 @@ def run_wordpress_attacks(target, session):
 
     if version.get("number"):
         _append_finding_once(f"[WP] WordPress {version.get('number')} ({version.get('status') or 'estado desconocido'})")
+    for plugin in plugins:
+        if isinstance(plugin, dict) and plugin.get("name"):
+            _append_finding_once(f"[WP:PLUGIN] {plugin.get('name')} {plugin.get('version') or 'version desconocida'}")
+    if main_theme.get("name"):
+        _append_finding_once(f"[WP:THEME] {main_theme.get('name')} {main_theme.get('version') or 'version desconocida'}")
+    for theme in scan.get("themes") or []:
+        if isinstance(theme, dict) and theme.get("name"):
+            _append_finding_once(f"[WP:THEME] {theme.get('name')} {theme.get('version') or 'version desconocida'}")
     for user in users:
         _append_finding_once(f"[WP:USER] {user}")
     for vuln in vulnerabilities:
@@ -4598,6 +4890,7 @@ def run_wordpress_attacks(target, session):
         print_info("WPScan no identificó usuarios; se omite la fuerza bruta automática.")
 
     SCAN_DATA["wordpress"] = scan
+    print_wpscan_detailed_summary(scan)
     return scan
 
 def spider_website(target, session, max_pages=500, max_depth=3, use_robots=True):
