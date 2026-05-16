@@ -146,6 +146,7 @@ SCAN_DATA = {
     "users": [],
     "emails": [],
     "bruteforce_credentials": [],
+    "wordpress_detection": {},
     "wordpress": {},
     "spider": {},
     "source_code_analysis": {},
@@ -2280,6 +2281,7 @@ def gather_info(target, session):
         ww_result = run_whatweb(target)
         if ww_result is not None:
             info['technologies'] = ww_result
+            info['technologies_source'] = 'whatweb'
         else:
             # Fallback: detección básica por cabeceras
             tech = []
@@ -2290,6 +2292,7 @@ def gather_info(target, session):
             if 'ASP.NET' in str(resp.headers):
                 tech.append('ASP.NET')
             info['technologies'] = list(set(tech))
+            info['technologies_source'] = 'headers'
             if info['technologies']:
                 print_info(f"Tecnologías (fallback): {', '.join(info['technologies'])}")
 
@@ -4786,6 +4789,149 @@ def print_wpscan_detailed_summary(scan):
             border_color=Fore.GREEN,
         )
 
+def _technology_to_text(item):
+    if isinstance(item, dict):
+        return " ".join(str(item.get(k) or "") for k in ("name", "detail", "version", "value"))
+    return str(item or "")
+
+def _whatweb_detects_wordpress(technologies):
+    matches = []
+    for item in technologies or []:
+        text = _technology_to_text(item).strip()
+        if not text:
+            continue
+        if re.search(r"\bwordpress\b", text, re.I):
+            matches.append(text)
+    return bool(matches), matches
+
+def _manual_wordpress_signal(signals, name, evidence, source):
+    evidence = str(evidence or "").strip()
+    key = (name, evidence[:160], source)
+    for item in signals:
+        if item.get("key") == key:
+            return
+    signals.append({
+        "key": key,
+        "name": name,
+        "evidence": evidence[:240],
+        "source": source,
+    })
+
+def _scan_text_for_wordpress_patterns(text, source, signals):
+    if not text:
+        return
+    patterns = [
+        ("meta generator", r'<meta[^>]+name=["\']generator["\'][^>]+content=["\'][^"\']*wordpress[^"\']*["\']'),
+        ("wp-content", r'/(?:wp-content)/(?:plugins|themes|uploads)/[^"\'<>\s]+'),
+        ("wp-includes", r'/(?:wp-includes)/[^"\'<>\s]+'),
+        ("wp-json", r'(?:/wp-json/|rest_route=/?wp/|wp/v2)'),
+        ("wp assets", r'(?:wp-emoji-release|wp-block-library|wp-polyfill|wp-embed|wpApiSettings)'),
+        ("wordpress text", r'\bWordPress\b'),
+    ]
+    for name, pattern in patterns:
+        match = re.search(pattern, text, re.I)
+        if match:
+            _manual_wordpress_signal(signals, name, match.group(0), source)
+
+def _manual_wordpress_detection(target, session):
+    signals = []
+    checked_urls = []
+
+    def fetch(url, method="GET"):
+        checked_urls.append(url)
+        try:
+            if method == "HEAD":
+                return session.head(url, timeout=DEFAULT_TIMEOUT, allow_redirects=True)
+            return session.get(url, timeout=DEFAULT_TIMEOUT, allow_redirects=True)
+        except Exception:
+            return None
+
+    resp = fetch(target)
+    if resp is not None:
+        _scan_text_for_wordpress_patterns(resp.text or "", "html", signals)
+        header_text = "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+        _scan_text_for_wordpress_patterns(header_text, "headers", signals)
+        if "xmlrpc.php" in str(resp.headers.get("X-Pingback", "")).lower():
+            _manual_wordpress_signal(signals, "x-pingback", resp.headers.get("X-Pingback"), "headers")
+
+    relative_base = target if str(target).endswith("/") else f"{target}/"
+    raw_probes = [
+        (urljoin(relative_base, "wp-login.php"), "login"),
+        (urljoin(target, "/wp-login.php"), "login"),
+        (urljoin(relative_base, "wp-json/"), "rest api"),
+        (urljoin(target, "/wp-json/"), "rest api"),
+        (urljoin(relative_base, "xmlrpc.php"), "xmlrpc"),
+        (urljoin(target, "/xmlrpc.php"), "xmlrpc"),
+    ]
+    probes = []
+    seen_probe_urls = set()
+    for url, probe_type in raw_probes:
+        if url in seen_probe_urls:
+            continue
+        seen_probe_urls.add(url)
+        probes.append((url, probe_type))
+    for url, probe_type in probes:
+        probe_resp = fetch(url)
+        if probe_resp is None:
+            continue
+        body = probe_resp.text or ""
+        body_low = body.lower()
+        if probe_type == "login" and probe_resp.status_code < 500:
+            if "wp-submit" in body_low or "wordpress" in body_low or "wp-login.php" in body_low:
+                _manual_wordpress_signal(signals, "wp-login.php", f"HTTP {probe_resp.status_code}", url)
+        elif probe_type == "rest api" and probe_resp.status_code < 500:
+            if "wp/v2" in body_low or '"namespaces"' in body_low or '"routes"' in body_low:
+                _manual_wordpress_signal(signals, "wp-json api", f"HTTP {probe_resp.status_code}", url)
+        elif probe_type == "xmlrpc" and probe_resp.status_code in (200, 405):
+            if "xml-rpc server accepts post requests only" in body_low or "xmlrpc" in body_low:
+                _manual_wordpress_signal(signals, "xmlrpc.php", f"HTTP {probe_resp.status_code}", url)
+
+    for item in signals:
+        item.pop("key", None)
+    strong_signals = [s for s in signals if s.get("name") != "wordpress text"]
+    return {
+        "detected": bool(strong_signals) or len(signals) >= 2,
+        "source": "manual",
+        "signals": signals,
+        "checked_urls": checked_urls,
+    }
+
+def detect_wordpress_for_full_pentest(target, session):
+    general = SCAN_DATA.get("general") or {}
+    technologies = general.get("technologies") or []
+    tech_source = general.get("technologies_source") or "unknown"
+
+    if tech_source == "whatweb":
+        detected, matches = _whatweb_detects_wordpress(technologies)
+        if detected:
+            detection = {
+                "detected": True,
+                "source": "whatweb",
+                "matches": matches,
+            }
+            SCAN_DATA["wordpress_detection"] = detection
+            print_good(f"WhatWeb detecto WordPress: {', '.join(matches[:3])}")
+            return detection
+        print_info("WhatWeb no detecto WordPress. Ejecutando deteccion manual por patrones.")
+    else:
+        print_info("No hay deteccion WhatWeb util para WordPress. Ejecutando deteccion manual por patrones.")
+
+    detection = _manual_wordpress_detection(target, session)
+    SCAN_DATA["wordpress_detection"] = detection
+    if detection.get("detected"):
+        signal_names = sorted({s.get("name", "") for s in detection.get("signals", []) if s.get("name")})
+        print_good(f"Deteccion manual compatible con WordPress: {', '.join(signal_names[:5])}")
+    else:
+        print_info("No se encontraron patrones manuales suficientes de WordPress.")
+    return detection
+
+def run_wordpress_attacks_if_detected(target, session):
+    detection = detect_wordpress_for_full_pentest(target, session)
+    if not detection.get("detected"):
+        print_info("Objetivo no identificado como WordPress. Saltando WPScan en pentesting completo.")
+        return None
+    return run_wordpress_attacks(target, session)
+
 def run_wordpress_attacks(target, session):
     print_phase("ENUMERACIÓN Y ATAQUES WORDPRESS")
     wpscan_path = check_wpscan()
@@ -5422,6 +5568,7 @@ def run_information_gathering(target, session):
             "status_code": info.get("status_code"),
             "server": info.get("server"),
             "technologies": info.get("technologies", []),
+            "technologies_source": info.get("technologies_source", "unknown"),
             "headers": info.get("headers", {}),
             "cookies": [c.name for c in info.get("cookies", [])],
         }
@@ -6141,7 +6288,7 @@ def run_full_pentest(target, session):
     run_injection_tests(target, session)               # 9
     run_api_tests(target, session)                     # 10
     run_user_enum_bruteforce(target, session)          # 11
-    run_wordpress_attacks(target, session)             # 12
+    run_wordpress_attacks_if_detected(target, session) # 12
     print_good("Pentesting completo finalizado.")
     print_final_summary(target)
 
