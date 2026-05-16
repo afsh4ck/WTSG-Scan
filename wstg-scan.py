@@ -4112,6 +4112,30 @@ def _decode_process_output(chunks):
         return ""
     return b"".join(chunks).decode("utf-8", errors="replace")
 
+def _stop_interrupted_process(process, name="proceso"):
+    if not process or process.poll() is not None:
+        return process.returncode if process else None
+    try:
+        return process.wait(timeout=0.2)
+    except subprocess.TimeoutExpired:
+        pass
+    except Exception:
+        return process.returncode
+
+    if process.poll() is None:
+        try:
+            process.terminate()
+            return process.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            try:
+                process.kill()
+                return process.wait(timeout=0.5)
+            except Exception:
+                return process.returncode
+        except Exception:
+            return process.returncode
+    return process.returncode
+
 def _stream_command_output(cmd, capture=True, prefer_pty=True, interrupt_label="proceso"):
     """Run a command while printing its raw output.
 
@@ -4149,9 +4173,9 @@ def _stream_command_output(cmd, capture=True, prefer_pty=True, interrupt_label="
             process.wait()
             return process.returncode, _decode_process_output(chunks)
         except KeyboardInterrupt:
-            print_warning(f"{interrupt_label} interrumpido; esperando a que finalice...")
-            _wait_for_interrupted_child(process, interrupt_label)
-            return process.returncode if process else None, _decode_process_output(chunks)
+            print_warning(f"{interrupt_label} interrumpido; deteniendo proceso...")
+            _stop_interrupted_process(process, interrupt_label)
+            return None, _decode_process_output(chunks)
         except Exception as e:
             print_warning(f"No se pudo usar PTY para {interrupt_label} ({type(e).__name__}); usando pipe.")
         finally:
@@ -4177,9 +4201,9 @@ def _stream_command_output(cmd, capture=True, prefer_pty=True, interrupt_label="
         process.wait()
         return process.returncode, _decode_process_output(chunks)
     except KeyboardInterrupt:
-        print_warning(f"{interrupt_label} interrumpido; esperando a que finalice...")
-        _wait_for_interrupted_child(process, interrupt_label)
-        return process.returncode if process else None, _decode_process_output(chunks)
+        print_warning(f"{interrupt_label} interrumpido; deteniendo proceso...")
+        _stop_interrupted_process(process, interrupt_label)
+        return None, _decode_process_output(chunks)
 
 def _capture_command_output(cmd, interrupt_label="proceso"):
     process = None
@@ -4188,9 +4212,9 @@ def _capture_command_output(cmd, interrupt_label="proceso"):
         stdout, _ = process.communicate()
         return process.returncode, (stdout or b"").decode("utf-8", errors="replace")
     except KeyboardInterrupt:
-        print_warning(f"{interrupt_label} interrumpido; esperando a que finalice...")
-        _wait_for_interrupted_child(process, interrupt_label)
-        return process.returncode if process else None, ""
+        print_warning(f"{interrupt_label} interrumpido; deteniendo proceso...")
+        _stop_interrupted_process(process, interrupt_label)
+        return None, ""
 
 def _load_json_file(path):
     if not path or not os.path.isfile(path) or os.path.getsize(path) == 0:
@@ -4523,11 +4547,15 @@ def _run_wpscan_json(cmd, request_timeout=None):
         rc = rc2
     return rc, stdout_text
 
-def run_wpscan_enumeration(target, session, wpscan_path, api_token=None, threads=5, request_timeout=15):
+def _wpscan_was_interrupted(return_code):
+    return return_code is None or return_code in (130, -2, -15)
+
+def run_wpscan_enumeration(target, session, wpscan_path, api_token=None, threads=5, request_timeout=15,
+                           enum_flags="u,ap,at", label="WPScan enumeracion"):
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix="wpscan_enum_")
     os.close(tmp_fd)
     # Usar enumerate explicito para evitar ambiguedades con versiones de WPScan
-    enum_flags = "u,ap,at"
+    enum_flags = str(enum_flags or "u,ap,at").strip() or "u,ap,at"
     base_cmd = [
         wpscan_path,
         "--url", target,
@@ -4546,13 +4574,16 @@ def run_wpscan_enumeration(target, session, wpscan_path, api_token=None, threads
     display_rc, stdout_text = _run_wpscan_visible(
         visible_cmd,
         request_timeout=request_timeout,
-        label="WPScan enumeracion",
+        label=label,
     )
 
     json_rc = None
     json_stdout = ""
-    if display_rc is not None:
+    interrupted = _wpscan_was_interrupted(display_rc)
+    if not interrupted:
         json_rc, json_stdout = _run_wpscan_json(json_cmd, request_timeout=request_timeout)
+    else:
+        print_info("WPScan interrumpido. Se omite la generacion JSON para volver al menu inmediatamente.")
 
     data = _load_json_file(tmp_path)
     try:
@@ -4566,9 +4597,10 @@ def run_wpscan_enumeration(target, session, wpscan_path, api_token=None, threads
     scan["return_code"] = json_rc if json_rc is not None else display_rc
     scan["display_return_code"] = display_rc
     scan["json_return_code"] = json_rc
+    scan["interrupted"] = interrupted
     scan["stdout_tail"] = stdout_text[-4000:] if stdout_text else ""
     scan["json_stdout_tail"] = json_stdout[-4000:] if json_stdout else ""
-    if scan["return_code"] not in (0, None):
+    if not scan["interrupted"] and scan["return_code"] not in (0, None):
         print_warning(f"WPScan termino con codigo {scan['return_code']}. Se guardara lo que haya podido parsearse.")
     return scan
 
@@ -4932,6 +4964,58 @@ def run_wordpress_attacks_if_detected(target, session):
         return None
     return run_wordpress_attacks(target, session)
 
+def run_wpscan_user_enumeration_if_wordpress(target, session, existing_users=None):
+    existing_users = list(existing_users or [])
+    detection = detect_wordpress_for_full_pentest(target, session)
+    if not detection.get("detected"):
+        print_info("Objetivo no identificado como WordPress. Se mantiene la enumeracion habitual de usuarios.")
+        return existing_users
+
+    wpscan_path = check_wpscan()
+    if not wpscan_path:
+        if not install_wpscan():
+            print_warning("WPScan no disponible. Se mantiene solo la enumeracion habitual de usuarios.")
+            return existing_users
+        wpscan_path = check_wpscan()
+        if not wpscan_path:
+            print_warning("WPScan sigue sin estar disponible.")
+            return existing_users
+
+    api_token = os.environ.get("WPSCAN_API_TOKEN") or os.environ.get("WPVULNDB_API_TOKEN") or ""
+    if api_token:
+        print_info("Usando token API de WPScan/WPVulnDB desde variable de entorno.")
+
+    scan = run_wpscan_enumeration(
+        target,
+        session,
+        wpscan_path,
+        api_token=api_token,
+        threads=max(5, THREADS),
+        request_timeout=max(15, DEFAULT_TIMEOUT),
+        enum_flags="u",
+        label="WPScan enumeracion de usuarios",
+    )
+    SCAN_DATA["wordpress"] = scan
+    if scan.get("interrupted"):
+        print_info("Enumeracion WPScan interrumpida. Continuando con los usuarios encontrados por los metodos habituales.")
+        return existing_users
+
+    wp_users = [u.get("username") for u in scan.get("users") or [] if isinstance(u, dict) and u.get("username")]
+    if wp_users:
+        merged_users = sorted(set(existing_users + wp_users))
+        SCAN_DATA["users"] = merged_users
+        for user in wp_users:
+            _append_finding_once(f"[WP:USER] {user}")
+        print_table(
+            headers=["Usuario"],
+            rows=[[u] for u in wp_users],
+            title=f"Usuarios WordPress identificados con WPScan ({len(wp_users)}):",
+        )
+        return merged_users
+
+    print_info("WPScan no identifico usuarios WordPress adicionales.")
+    return existing_users
+
 def run_wordpress_attacks(target, session):
     print_phase("ENUMERACIÓN Y ATAQUES WORDPRESS")
     wpscan_path = check_wpscan()
@@ -4957,6 +5041,9 @@ def run_wordpress_attacks(target, session):
     enum_threads = max(5, THREADS)
     scan = run_wpscan_enumeration(target, session, wpscan_path, api_token=api_token, threads=enum_threads, request_timeout=max(15, DEFAULT_TIMEOUT))
     SCAN_DATA["wordpress"] = scan
+    if scan.get("interrupted"):
+        print_info("Enumeracion WPScan interrumpida. Volviendo al flujo principal.")
+        return scan
 
     version = scan.get("version") or {}
     users = [u.get("username") for u in scan.get("users") or [] if u.get("username")]
@@ -5751,14 +5838,19 @@ def run_api_tests(target, session):
 
 def run_user_enum_bruteforce(target, session):
     print_phase("ENUMERACIÓN DE USUARIOS Y BRUTEFORCE")
-    users, emails = safe_execute(enumerate_users_from_endpoints, target, session)
-    SCAN_DATA["users"] = sorted(set(users or []))
+    users, emails = safe_execute(enumerate_users_from_endpoints, target, session) or ([], [])
+    users = sorted(set(users or []))
+    SCAN_DATA["users"] = users
     SCAN_DATA["emails"] = sorted(set(emails or []))
     if users:
         print_good(f"Usuarios encontrados: {', '.join(users)}")
     if emails:
         print_good(f"Emails encontrados: {', '.join(emails)}")
     safe_execute(test_user_enumeration_form, target, session)
+    wp_users = safe_execute(run_wpscan_user_enumeration_if_wordpress, target, session, users)
+    if wp_users is not None:
+        users = sorted(set(wp_users or []))
+        SCAN_DATA["users"] = users
     print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} ¿Desea realizar fuerza bruta de contraseñas? (s/n):")
     want_brute = input("> ").strip().lower()
     if want_brute in ('', 's'):
